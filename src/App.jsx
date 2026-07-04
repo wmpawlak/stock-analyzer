@@ -1,0 +1,86 @@
+import { BrowserRouter as Router, Routes, Route, NavLink } from 'react-router-dom';
+import Settings from './pages/Settings';
+import Portfolio from './pages/Portfolio';
+import DataInput from './pages/DataInput';
+
+const Sidebar = () => {
+  const linkStyle = ({ isActive }) =>
+    `flex items-center gap-3 px-4 py-3 mt-1.5 text-sm font-medium rounded-xl transition-all duration-200 ${
+      isActive
+        ? 'bg-blue-600/10 text-blue-400 border-l-4 border-blue-500 pl-3 font-semibold'
+        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border-l-4 border-transparent'
+    }`;
+
+  return (
+    <div className="w-64 min-h-screen bg-slate-900 border-r border-slate-800/80 px-4 py-8 flex flex-col justify-between shrink-0">
+      <div>
+        <div className="px-4 mb-8">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-gradient-to-tr from-blue-600 to-indigo-500 rounded-xl shadow-lg shadow-blue-500/20">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+              </svg>
+            </div>
+            <div>
+              <h1 className="text-lg font-bold bg-gradient-to-r from-white via-slate-100 to-slate-400 bg-clip-text text-transparent">
+                Stock Analyzer
+              </h1>
+              <p className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Terminal Inwestora</p>
+            </div>
+          </div>
+        </div>
+
+        <nav className="space-y-1">
+          <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Menu główne</p>
+          <NavLink to="/" className={linkStyle}>
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 3.055A9.003 9.003 0 1020.945 13H11V3.055z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z" />
+            </svg>
+            Portfel
+          </NavLink>
+          <NavLink to="/data" className={linkStyle}>
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m-9 1V4a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+            </svg>
+            Dane wejściowe
+          </NavLink>
+          <NavLink to="/settings" className={linkStyle}>
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            Ustawienia
+          </NavLink>
+        </nav>
+      </div>
+
+      <div className="bg-slate-800/40 border border-slate-800 p-4 rounded-xl">
+        <div className="flex items-center gap-2">
+          <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></div>
+          <p className="text-xs font-semibold text-slate-300">Wszystkie systemy online</p>
+        </div>
+        <p className="text-[10px] text-slate-500 mt-1">Lokalna baza danych aktywna</p>
+      </div>
+    </div>
+  );
+};
+
+function App() {
+  return (
+    <Router>
+      <div className="flex min-h-screen font-sans bg-slate-950 text-slate-100 antialiased selection:bg-blue-600/30 selection:text-blue-200">
+        <Sidebar />
+        <main className="flex-1 bg-gradient-to-b from-slate-900 via-slate-950 to-slate-950 overflow-y-auto">
+          <Routes>
+            <Route path="/" element={<Portfolio />} />
+            <Route path="/data" element={<DataInput />} />
+            <Route path="/settings" element={<Settings />} />
+          </Routes>
+        </main>
+      </div>
+    </Router>
+  );
+}
+
+export default App;
