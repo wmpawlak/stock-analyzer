@@ -37,7 +37,7 @@ const CustomTooltip = ({ active, payload, label }) => {
                             <div key={`delta-${index}`} className="border-t border-slate-800 pt-2 mt-2">
                                 <div className="flex justify-between gap-6 text-xs">
                                     <span className="font-medium text-slate-400">Zysk / Strata:</span>
-                                    <span className={`font-mono font-bold ${isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                    <span className={`font-mono font-bold ${isPositive ? 'text-blue-400' : 'text-rose-400'}`}>
                                             {isPositive ? '+' : ''}
                                             {new Intl.NumberFormat('pl-PL', {
                                             style: 'currency', currency: 'PLN', maximumFractionDigits: 0
@@ -108,16 +108,14 @@ const PortfolioHistoryChart = () => {
                             <stop offset="0%" stopColor="#ef4444" stopOpacity={0.15} />
                             <stop offset="100%" stopColor="#ef4444" stopOpacity={0.0} />
                         </linearGradient>
-                        {/* Wypełnienie obszaru dla Delty z twardym odcięciem na poziomie zero */}
                         <linearGradient id="colorDeltaFill" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset={0} stopColor="#10b981" stopOpacity={0.3} />
-                            <stop offset={gradientOffset} stopColor="#10b981" stopOpacity={0.02} />
+                            <stop offset={0} stopColor="#3b82f6" stopOpacity={0.3} />
+                            <stop offset={gradientOffset} stopColor="#3b82f6" stopOpacity={0.02} />
                             <stop offset={gradientOffset} stopColor="#ef4444" stopOpacity={0.02} />
                             <stop offset={1} stopColor="#ef4444" stopOpacity={0.3} />
                         </linearGradient>
-                        {/* Obrys linii dla Delty z twardym odcięciem na poziomie zero */}
                         <linearGradient id="colorDeltaStroke" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset={gradientOffset} stopColor="#10b981" stopOpacity={1} />
+                            <stop offset={gradientOffset} stopColor="#3b82f6" stopOpacity={1} />
                             <stop offset={gradientOffset} stopColor="#ef4444" stopOpacity={1} />
                         </linearGradient>
                     </defs>
@@ -184,7 +182,7 @@ const PortfolioHistoryChart = () => {
                             return (
                                 <circle
                                     cx={cx} cy={cy} r={5}
-                                    fill={isPositive ? '#10b981' : '#ef4444'}
+                                    fill={isPositive ? '#3b82f6' : '#ef4444'}
                                     stroke="#0f172a" strokeWidth={2}
                                 />
                             );
