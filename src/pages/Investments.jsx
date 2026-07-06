@@ -1,0 +1,657 @@
+import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
+
+const PORTFOLIO_NAMES = ['Portfel Makler', 'Portfel IKZE'];
+const MAX_COMPACT_COLUMNS = 10;
+const SELECTED_COLUMNS_STORAGE_KEY = 'investmentCompactColumns';
+const TOTAL_COLUMNS_STORAGE_KEY = 'investmentTotalColumns';
+
+const ASSET_COLUMN_ALIASES = [
+    'Akcje i inne instrumenty',
+    'Akcje',
+    'Instrument',
+    'Instrument finansowy',
+    'Walor',
+    'Ticker',
+    'Symbol',
+];
+
+const COMPACT_COLUMN_ALIASES = [
+    ASSET_COLUMN_ALIASES,
+    ['Ilość', 'Ilosc', 'Liczba', 'Sztuki', 'Quantity'],
+    ['Kurs kupna', 'Cena kupna', 'Cena zakupu', 'Buy price'],
+    ['Koszt całkowity', 'Koszt calkowity', 'Koszt', 'Total cost'],
+    ['Aktualny kurs', 'Kurs aktualny', 'Cena aktualna', 'Current price'],
+    ['Cena sprzedaży brutto', 'Cena sprzedazy brutto', 'Wartość aktualna', 'Wartosc aktualna', 'Market value'],
+    ['Dywidenda netto', 'Dywidenda', 'Dividend'],
+    ['Zysk netto', 'Net profit'],
+    ['Data zakupu', 'Purchase date'],
+];
+
+const EXCLUDED_COMPACT_COLUMN_ALIASES = [
+    ['Cena kupna brutto', 'Wartość zakupu', 'Wartosc zakupu', 'Purchase value'],
+    ['Zysk/Strata', 'Zysk', 'Wynik', 'Profit', 'P/L'],
+    ['Strategia', 'Strategy'],
+];
+
+const PROFIT_PERCENT_ALIASES = ['Zysk/Strata %', 'Zysk %', 'Wynik %', 'Profit %', 'P/L %'];
+
+const VALUE_ALIASES = [
+    'Cena sprzedaży brutto',
+    'Cena sprzedazy brutto',
+    'Wartość aktualna',
+    'Wartosc aktualna',
+    'Wartosc',
+    'Wartość',
+    'Wartość PLN',
+    'Wartosc PLN',
+    'Value',
+    'Kwota',
+    'Saldo',
+];
+
+const normalizeText = (value) => String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]/g, '')
+    .toLowerCase();
+
+const parseNumericValue = (value) => {
+    if (typeof value === 'number') return value;
+    if (value === null || value === undefined) return NaN;
+
+    const compactValue = String(value).trim().replace(/\s/g, '');
+    if (!compactValue) return NaN;
+
+    const numericText = compactValue.replace(/[^\d,.-]/g, '');
+    const lastComma = numericText.lastIndexOf(',');
+    const lastDot = numericText.lastIndexOf('.');
+
+    const numericValue = (() => {
+        if (lastComma > -1 && lastDot > -1) {
+            return lastComma > lastDot
+                ? numericText.replace(/\./g, '').replace(',', '.')
+                : numericText.replace(/,/g, '');
+        }
+
+        if (lastComma > -1) return numericText.replace(',', '.');
+
+        return numericText.replace(/\.(?=\d{3}(?:\D|$))/g, '');
+    })();
+
+    return parseFloat(numericValue);
+};
+
+const formatCurrency = (value) => new Intl.NumberFormat('pl-PL', {
+    style: 'currency',
+    currency: 'PLN',
+    maximumFractionDigits: 2,
+}).format(value);
+
+const getHeaders = (rows) => {
+    const headers = [];
+    rows.forEach((row) => {
+        if (!row || typeof row !== 'object') return;
+        Object.keys(row).forEach((key) => {
+            if (!headers.includes(key)) headers.push(key);
+        });
+    });
+    return headers;
+};
+
+const hasPercentMarker = (value) => String(value ?? '').includes('%');
+
+const matchesAlias = (header, alias) => (
+    normalizeText(header) === normalizeText(alias)
+    && hasPercentMarker(header) === hasPercentMarker(alias)
+);
+
+const findColumn = (headers, aliases) => {
+    return headers.find((header) => aliases.some((alias) => matchesAlias(header, alias)));
+};
+
+const matchesAliases = (header, aliases) => (
+    aliases.some((alias) => matchesAlias(header, alias))
+);
+
+const isAssetColumn = (header) => (
+    matchesAliases(header, ASSET_COLUMN_ALIASES)
+);
+
+const getCompactHeaders = (rows) => {
+    const headers = getHeaders(rows);
+    const profitPercentHeader = findColumn(headers, PROFIT_PERCENT_ALIASES);
+    const excludedHeaders = headers.filter((header) => (
+        EXCLUDED_COMPACT_COLUMN_ALIASES.some((aliases) => matchesAliases(header, aliases))
+    ));
+    const preferredHeaders = COMPACT_COLUMN_ALIASES
+        .map((aliases) => findColumn(headers, aliases))
+        .filter(Boolean);
+
+    const nonEmptyHeaders = headers.filter((header) => (
+        rows.some((row) => String(row?.[header] ?? '').trim())
+    ));
+    const uniquePreferredHeaders = [...new Set(preferredHeaders)].filter(
+        (header) => !excludedHeaders.includes(header) && header !== profitPercentHeader,
+    );
+    const fallbackHeaders = nonEmptyHeaders.filter((header) => (
+        !uniquePreferredHeaders.includes(header)
+        && !excludedHeaders.includes(header)
+        && header !== profitPercentHeader
+    ));
+    const columnLimit = profitPercentHeader ? MAX_COMPACT_COLUMNS - 1 : MAX_COMPACT_COLUMNS;
+    const compactHeaders = [...uniquePreferredHeaders, ...fallbackHeaders].slice(0, columnLimit);
+    const assetHeader = findColumn(headers, ASSET_COLUMN_ALIASES);
+    const orderedHeaders = assetHeader
+        ? [assetHeader, ...compactHeaders.filter((header) => header !== assetHeader)]
+        : compactHeaders;
+
+    return [
+        ...orderedHeaders,
+        ...(profitPercentHeader ? [profitPercentHeader] : []),
+    ].slice(0, MAX_COMPACT_COLUMNS);
+};
+
+const getSelectedHeaders = (rows, selectedHeaders) => {
+    const headers = getHeaders(rows);
+    const defaultHeaders = getCompactHeaders(rows);
+    const configuredHeaders = Array.isArray(selectedHeaders) && selectedHeaders.length > 0
+        ? selectedHeaders.filter((header) => headers.includes(header))
+        : defaultHeaders;
+    const assetHeader = findColumn(headers, ASSET_COLUMN_ALIASES);
+
+    if (!assetHeader || !configuredHeaders.includes(assetHeader)) {
+        return configuredHeaders;
+    }
+
+    return [
+        assetHeader,
+        ...configuredHeaders.filter((header) => header !== assetHeader),
+    ];
+};
+
+const getSelectedTotalHeaders = (rows, selectedTotalHeaders) => {
+    const headers = getHeaders(rows);
+    return Array.isArray(selectedTotalHeaders)
+        ? selectedTotalHeaders.filter((header) => headers.includes(header))
+        : [];
+};
+
+const getColumnTotal = (rows, header) => {
+    const values = rows
+        .map((row) => parseNumericValue(row?.[header]))
+        .filter(Number.isFinite);
+
+    if (values.length === 0) return null;
+
+    return values.reduce((sum, value) => sum + value, 0);
+};
+
+const formatTotalValue = (header, value) => {
+    if (value === null) return '';
+    const formattedValue = new Intl.NumberFormat('pl-PL', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    }).format(value);
+
+    return hasPercentMarker(header) ? `${formattedValue}%` : formattedValue;
+};
+
+const parseAssetCell = (value) => {
+    const rawValue = String(value ?? '').trim();
+    if (!rawValue) return { label: '', quote: '', url: '' };
+
+    const [quote, ...nameParts] = rawValue.split(/\s+/);
+    const label = nameParts.join(' ').trim() || rawValue;
+
+    return {
+        label,
+        quote,
+        url: quote ? `https://www.google.com/finance/beta/quote/${quote}` : '',
+    };
+};
+
+const TableCell = ({ header, value }) => {
+    if (matchesAliases(header, PROFIT_PERCENT_ALIASES)) {
+        const numericValue = parseNumericValue(value);
+        const valueColor = !Number.isFinite(numericValue)
+            ? 'text-slate-300'
+            : numericValue > 0
+                ? 'text-emerald-400'
+                : numericValue < 0
+                    ? 'text-rose-400'
+                    : 'text-slate-300';
+
+        return (
+            <span className={`font-mono font-semibold ${valueColor}`}>
+                {value ?? ''}
+            </span>
+        );
+    }
+
+    if (!isAssetColumn(header)) {
+        return <>{value ?? ''}</>;
+    }
+
+    const asset = parseAssetCell(value);
+    if (!asset.url) return <>{asset.label}</>;
+
+    return (
+        <a
+            href={asset.url}
+            target="_blank"
+            rel="noreferrer"
+            className="font-semibold text-blue-300 hover:text-blue-200 hover:underline underline-offset-4"
+            title={asset.quote}
+        >
+            {asset.label}
+        </a>
+    );
+};
+
+const getPortfolioRows = (liveData, portfolioName) => {
+    if (!liveData || typeof liveData !== 'object') return [];
+
+    const matchingKey = Object.keys(liveData).find(
+        (key) => normalizeText(key) === normalizeText(portfolioName),
+    );
+    const rows = matchingKey ? liveData[matchingKey] : [];
+
+    return Array.isArray(rows) ? rows.filter((row) => row && typeof row === 'object') : [];
+};
+
+const getPortfolioSummary = (rows) => {
+    const headers = getHeaders(rows);
+    const valueHeader = findColumn(headers, VALUE_ALIASES);
+    if (!valueHeader) return { count: rows.length, totalValue: null };
+
+    const totalValue = rows.reduce((sum, row) => {
+        const value = parseNumericValue(row[valueHeader]);
+        return Number.isFinite(value) ? sum + value : sum;
+    }, 0);
+
+    return { count: rows.length, totalValue };
+};
+
+const FullTableModal = ({
+    portfolioName,
+    rows,
+    selectedHeaders,
+    selectedTotalHeaders,
+    onToggleColumn,
+    onToggleTotalColumn,
+    onClose,
+}) => {
+    useEffect(() => {
+        const handleEscape = (event) => {
+            if (event.key === 'Escape') onClose();
+        };
+
+        document.addEventListener('keydown', handleEscape);
+        return () => document.removeEventListener('keydown', handleEscape);
+    }, [onClose]);
+
+    const headers = getHeaders(rows);
+    const visibleHeaders = getSelectedHeaders(rows, selectedHeaders);
+    const totalHeaders = getSelectedTotalHeaders(rows, selectedTotalHeaders);
+
+    return createPortal(
+        <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 animate-fadeIn"
+            onClick={onClose}
+        >
+            <div
+                className="bg-slate-900 border border-slate-800/80 rounded-2xl shadow-2xl w-full max-w-7xl max-h-[90vh] mx-4 overflow-hidden flex flex-col"
+                onClick={(event) => event.stopPropagation()}
+            >
+                <div className="px-6 py-5 border-b border-slate-800/80 bg-slate-900/50 flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                        <h3 className="text-lg font-bold text-white">{portfolioName}</h3>
+                        <p className="mt-1 text-xs text-slate-500">{rows.length} pozycji, {headers.length} kolumn</p>
+                    </div>
+                    <button
+                        onClick={onClose}
+                        className="p-2 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded-lg transition-colors"
+                        aria-label="Zamknij pelna tabele"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+
+                <div className="p-6 bg-slate-950/40 flex-1 min-h-0">
+                    <div className="h-full max-h-[66vh] overflow-auto rounded-xl border border-slate-800/80 bg-slate-950 shadow-inner">
+                        <table className="w-full min-w-max text-sm text-left text-slate-400">
+                            <thead className="sticky top-0 z-10 text-xs text-slate-300 uppercase bg-slate-900">
+                                <tr>
+                                    {headers.map((header) => {
+                                        const isSelected = visibleHeaders.includes(header);
+
+                                        return (
+                                        <th
+                                            key={header}
+                                            scope="col"
+                                            className={`border-b px-5 py-3 font-semibold transition-colors ${
+                                                isSelected
+                                                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                                                    : 'border-rose-500/20 bg-rose-500/10 text-rose-300'
+                                            }`}
+                                        >
+                                            <button
+                                                type="button"
+                                                onClick={() => onToggleColumn(header)}
+                                                className="w-full text-left uppercase"
+                                                aria-pressed={isSelected}
+                                                title={isSelected ? 'Widoczna w widoku uproszczonym' : 'Ukryta w widoku uproszczonym'}
+                                            >
+                                                {header}
+                                            </button>
+                                        </th>
+                                        );
+                                    })}
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-800/50">
+                                {rows.map((row, rowIndex) => (
+                                    <tr key={rowIndex} className="hover:bg-slate-800/30 transition-colors">
+                                        {headers.map((header) => (
+                                            <td key={header} className="px-5 py-3 whitespace-nowrap">
+                                                <TableCell header={header} value={row[header]} />
+                                            </td>
+                                        ))}
+                                    </tr>
+                                ))}
+                            </tbody>
+                            <tfoot className="sticky bottom-0 z-10 bg-slate-900 text-xs uppercase text-slate-300">
+                                <tr className="border-t border-slate-700">
+                                    {headers.map((header, headerIndex) => {
+                                        const isTotalSelected = totalHeaders.includes(header);
+
+                                        return (
+                                        <td
+                                            key={header}
+                                            className={`px-5 py-3 font-semibold transition-colors ${
+                                                isTotalSelected
+                                                    ? 'bg-emerald-500/10 text-emerald-300'
+                                                    : 'bg-slate-900 text-slate-500'
+                                            }`}
+                                        >
+                                            <label className="flex items-center gap-2 whitespace-nowrap">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={isTotalSelected}
+                                                    onChange={() => onToggleTotalColumn(header)}
+                                                    className="h-4 w-4 rounded border-slate-600 bg-slate-950 text-emerald-500 accent-emerald-500"
+                                                    aria-label={`Sumuj kolumne ${header}`}
+                                                />
+                                                {headerIndex === 0 ? 'Sumuj w Total' : 'Sumuj'}
+                                            </label>
+                                        </td>
+                                        );
+                                    })}
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>,
+        document.body,
+    );
+};
+
+const InvestmentTable = ({ portfolioName, rows, selectedHeaders, selectedTotalHeaders, onOpenFullTable }) => {
+    const compactHeaders = useMemo(
+        () => getSelectedHeaders(rows, selectedHeaders),
+        [rows, selectedHeaders],
+    );
+    const totalHeaders = useMemo(
+        () => getSelectedTotalHeaders(rows, selectedTotalHeaders),
+        [rows, selectedTotalHeaders],
+    );
+    const totalValues = useMemo(() => totalHeaders.reduce((totals, header) => ({
+        ...totals,
+        [header]: getColumnTotal(rows, header),
+    }), {}), [rows, totalHeaders]);
+    const summary = useMemo(() => getPortfolioSummary(rows), [rows]);
+    const hasTotalRow = compactHeaders.some((header) => (
+        totalHeaders.includes(header) && totalValues[header] !== null
+    ));
+
+    if (rows.length === 0) {
+        return (
+            <div className="bg-slate-900 border border-slate-800/80 rounded-2xl shadow-xl p-8 text-center text-slate-400">
+                <div className="mx-auto w-12 h-12 bg-slate-800/50 rounded-xl flex items-center justify-center mb-3">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7h18M3 12h18M3 17h18" />
+                    </svg>
+                </div>
+                <p className="text-sm font-medium text-slate-300">{portfolioName}</p>
+                <p className="text-xs text-slate-500 mt-1">Brak danych dla tego zakresu w cache Dane Live.</p>
+            </div>
+        );
+    }
+
+    return (
+        <div className="bg-slate-900 border border-slate-800/80 rounded-2xl shadow-xl overflow-hidden transition-all hover:border-slate-700/70">
+            <div className="px-6 py-5 border-b border-slate-800/80 bg-slate-900/50 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <div>
+                    <h2 className="text-lg font-bold text-white">{portfolioName}</h2>
+                    <p className="text-xs text-slate-500 mt-0.5">Widok skrocony na podstawie danych z zakladki Dane Live</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                    <span className="text-xs font-semibold bg-slate-800 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-700/50">
+                        {summary.count} pozycji
+                    </span>
+                    {summary.totalValue !== null && (
+                        <span className="font-mono font-bold text-sm text-blue-400 bg-blue-500/10 border border-blue-500/20 px-4 py-2 rounded-xl shadow-inner">
+                            Suma: {formatCurrency(summary.totalValue)}
+                        </span>
+                    )}
+                    <button
+                        onClick={onOpenFullTable}
+                        className="inline-flex items-center justify-center gap-2 px-4 py-2 font-medium text-xs rounded-lg transition-colors bg-blue-600 text-white hover:bg-blue-500"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5h-4m4 0v-4m0 4l-5-5" />
+                        </svg>
+                        Pelna tabela
+                    </button>
+                </div>
+            </div>
+            <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left text-slate-400">
+                    <thead className="text-xs text-slate-300 uppercase bg-slate-800/50">
+                        <tr>
+                            {compactHeaders.map((header) => (
+                                <th key={header} scope="col" className="px-6 py-3 font-semibold">
+                                    {header}
+                                </th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/50">
+                        {rows.map((row, rowIndex) => (
+                            <tr key={rowIndex} className="hover:bg-slate-800/30 transition-colors">
+                                {compactHeaders.map((header) => (
+                                    <td key={header} className="px-6 py-4 whitespace-nowrap">
+                                        <TableCell header={header} value={row[header]} />
+                                    </td>
+                                ))}
+                            </tr>
+                        ))}
+                    </tbody>
+                    {hasTotalRow && (
+                        <tfoot className="border-t border-slate-700 bg-slate-950/60">
+                            <tr>
+                                {compactHeaders.map((header, headerIndex) => {
+                                    const totalValue = totalHeaders.includes(header) ? totalValues[header] : null;
+
+                                    return (
+                                    <td key={header} className="px-6 py-4 whitespace-nowrap font-mono text-sm font-semibold text-slate-200">
+                                        {headerIndex === 0
+                                            ? 'Suma wybranych kolumn'
+                                            : formatTotalValue(header, totalValue)}
+                                    </td>
+                                    );
+                                })}
+                            </tr>
+                        </tfoot>
+                    )}
+                </table>
+            </div>
+        </div>
+    );
+};
+
+const Investments = () => {
+    const [liveData, setLiveData] = useState(() => {
+        try {
+            const saved = localStorage.getItem('fetchedLiveData');
+            return saved ? JSON.parse(saved) : null;
+        } catch {
+            return null;
+        }
+    });
+    const [activeModal, setActiveModal] = useState(null);
+    const [selectedColumnsByPortfolio, setSelectedColumnsByPortfolio] = useState(() => {
+        try {
+            const saved = localStorage.getItem(SELECTED_COLUMNS_STORAGE_KEY);
+            return saved ? JSON.parse(saved) : {};
+        } catch {
+            return {};
+        }
+    });
+    const [totalColumnsByPortfolio, setTotalColumnsByPortfolio] = useState(() => {
+        try {
+            const saved = localStorage.getItem(TOTAL_COLUMNS_STORAGE_KEY);
+            return saved ? JSON.parse(saved) : {};
+        } catch {
+            return {};
+        }
+    });
+
+    useEffect(() => {
+        localStorage.setItem(SELECTED_COLUMNS_STORAGE_KEY, JSON.stringify(selectedColumnsByPortfolio));
+    }, [selectedColumnsByPortfolio]);
+
+    useEffect(() => {
+        localStorage.setItem(TOTAL_COLUMNS_STORAGE_KEY, JSON.stringify(totalColumnsByPortfolio));
+    }, [totalColumnsByPortfolio]);
+
+    const portfolios = useMemo(() => PORTFOLIO_NAMES.map((name) => ({
+        name,
+        rows: getPortfolioRows(liveData, name),
+    })), [liveData]);
+
+    const foundCount = portfolios.filter((portfolio) => portfolio.rows.length > 0).length;
+
+    const refreshLiveData = () => {
+        try {
+            const saved = localStorage.getItem('fetchedLiveData');
+            setLiveData(saved ? JSON.parse(saved) : null);
+        } catch {
+            setLiveData(null);
+        }
+    };
+
+    const toggleCompactColumn = (portfolioName, header) => {
+        setSelectedColumnsByPortfolio((currentSelections) => {
+            const portfolio = portfolios.find((item) => item.name === portfolioName);
+            const currentHeaders = getSelectedHeaders(
+                portfolio?.rows ?? [],
+                currentSelections[portfolioName],
+            );
+            const nextHeaders = currentHeaders.includes(header)
+                ? currentHeaders.filter((selectedHeader) => selectedHeader !== header)
+                : [...currentHeaders, header];
+
+            return {
+                ...currentSelections,
+                [portfolioName]: nextHeaders,
+            };
+        });
+    };
+
+    const toggleTotalColumn = (portfolioName, header) => {
+        setTotalColumnsByPortfolio((currentSelections) => {
+            const portfolio = portfolios.find((item) => item.name === portfolioName);
+            const currentHeaders = getSelectedTotalHeaders(
+                portfolio?.rows ?? [],
+                currentSelections[portfolioName],
+            );
+            const nextHeaders = currentHeaders.includes(header)
+                ? currentHeaders.filter((selectedHeader) => selectedHeader !== header)
+                : [...currentHeaders, header];
+
+            return {
+                ...currentSelections,
+                [portfolioName]: nextHeaders,
+            };
+        });
+    };
+
+    return (
+        <div className="p-8 max-w-[1600px] mx-auto animate-fadeIn">
+            <div className="mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                <div>
+                    <h1 className="text-3xl font-bold bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
+                        Inwestycje
+                    </h1>
+                    <p className="text-slate-400 text-sm mt-1">Pozycje z zakresow Portfel Makler oraz Portfel IKZE pobranych w Dane Live.</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                    <span className="text-xs font-semibold bg-emerald-500/10 text-emerald-400 px-3 py-1.5 rounded-lg border border-emerald-500/20">
+                        {foundCount}/2 portfele znalezione
+                    </span>
+                    <button
+                        onClick={refreshLiveData}
+                        className="inline-flex items-center justify-center gap-2 px-4 py-2 font-medium text-xs rounded-lg transition-colors bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700/50"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v6h6M20 20v-6h-6M5 19A9 9 0 0019 5M19 5h-5m5 0v5" />
+                        </svg>
+                        Odswiez widok
+                    </button>
+                </div>
+            </div>
+
+            {!liveData && (
+                <div className="mb-8 p-4 rounded-xl border flex items-center gap-3 text-sm font-medium bg-amber-500/10 border-amber-500/20 text-amber-300">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Brak zapisanych danych. Najpierw pobierz wszystkie zakresy w zakladce Dane Live.
+                </div>
+            )}
+
+            <div className="grid grid-cols-1 gap-8">
+                {portfolios.map((portfolio) => (
+                    <InvestmentTable
+                        key={portfolio.name}
+                        portfolioName={portfolio.name}
+                        rows={portfolio.rows}
+                        selectedHeaders={selectedColumnsByPortfolio[portfolio.name]}
+                        selectedTotalHeaders={totalColumnsByPortfolio[portfolio.name]}
+                        onOpenFullTable={() => setActiveModal(portfolio)}
+                    />
+                ))}
+            </div>
+
+            {activeModal && (
+                <FullTableModal
+                    portfolioName={activeModal.name}
+                    rows={activeModal.rows}
+                    selectedHeaders={selectedColumnsByPortfolio[activeModal.name]}
+                    selectedTotalHeaders={totalColumnsByPortfolio[activeModal.name]}
+                    onToggleColumn={(header) => toggleCompactColumn(activeModal.name, header)}
+                    onToggleTotalColumn={(header) => toggleTotalColumn(activeModal.name, header)}
+                    onClose={() => setActiveModal(null)}
+                />
+            )}
+        </div>
+    );
+};
+
+export default Investments;

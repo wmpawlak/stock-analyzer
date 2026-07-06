@@ -1,5 +1,4 @@
-import React, { useState, useEffect } from 'react';
-import EditConfigModal from '../components/EditConfigModal';
+import { useState, useEffect } from 'react';
 import JsonPreviewModal from '../components/JsonPreviewModal';
 import DataTable from '../components/DataTable';
 
@@ -153,7 +152,6 @@ const LiveData = () => {
 
     const [isJsonModalOpen, setIsJsonModalOpen] = useState(false);
     const [editingConfig, setEditingConfig] = useState(null);
-    const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 
     // Save configs to LocalStorage when changed
     useEffect(() => {
@@ -161,13 +159,30 @@ const LiveData = () => {
     }, [savedConfigs]);
 
     const handleEditClick = (config) => {
-        setEditingConfig(config);
-        setIsEditModalOpen(true);
+        setEditingConfig({ ...config });
     };
 
-    const handleUpdateConfig = (updatedConfig) => {
+    const handleEditConfigChange = (e) => {
+        const { name, value } = e.target;
+        setEditingConfig(prev => ({ ...prev, [name]: value }));
+    };
+
+    const handleCancelEdit = () => {
+        setEditingConfig(null);
+    };
+
+    const handleUpdateConfig = () => {
+        if (!editingConfig?.name?.trim() || !editingConfig?.url?.trim()) return;
+
+        const updatedConfig = {
+            ...editingConfig,
+            name: editingConfig.name.trim(),
+            url: editingConfig.url.trim(),
+            sheetName: editingConfig.sheetName?.trim() || '',
+            range: editingConfig.range?.trim() || ''
+        };
+
         setSavedConfigs(prev => prev.map(c => c.id === updatedConfig.id ? updatedConfig : c));
-        setIsEditModalOpen(false);
         setEditingConfig(null);
     };
 
@@ -188,6 +203,9 @@ const LiveData = () => {
 
     const handleRemoveConfig = (id) => {
         setSavedConfigs(prev => prev.filter(c => c.id !== id));
+        if (editingConfig?.id === id) {
+            setEditingConfig(null);
+        }
     };
 
     const handleFetchSingle = async () => {
@@ -223,17 +241,6 @@ const LiveData = () => {
         } finally {
             setLoading(false);
         }
-    };
-
-    const downloadJson = () => {
-        if (!jsonData) return;
-        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(jsonData, null, 2));
-        const downloadAnchor = document.createElement('a');
-        downloadAnchor.setAttribute("href", dataStr);
-        downloadAnchor.setAttribute("download", `dane_live_${new Date().toISOString().split('T')[0]}.json`);
-        document.body.appendChild(downloadAnchor);
-        downloadAnchor.click();
-        downloadAnchor.remove();
     };
 
     return (
@@ -281,14 +288,18 @@ const LiveData = () => {
                     {/* Zapisywanie konfiguracji */}
                     <div className="bg-slate-900 border border-slate-800/80 rounded-2xl shadow-xl overflow-hidden flex flex-col">
                         <div className="px-6 py-5 border-b border-slate-800/80 bg-slate-900/50">
-                            <h3 className="text-lg font-bold text-white">Dodaj nowy zakres</h3>
+                            <h3 className="text-lg font-bold text-white">
+                                {editingConfig ? 'Edytuj zakres' : 'Dodaj nowy zakres'}
+                            </h3>
                         </div>
                         <div className="p-6 space-y-5 flex-1">
                             <div>
                                 <label className="block text-xs font-medium text-slate-400 mb-1.5">Nazwa własna dla zapisanej konfiguracji</label>
                                 <input
                                     type="text" placeholder="np. Portfel Główny - dywidendy"
-                                    value={configName} onChange={(e) => setConfigName(e.target.value)}
+                                    name="name"
+                                    value={editingConfig ? editingConfig.name ?? '' : configName}
+                                    onChange={editingConfig ? handleEditConfigChange : (e) => setConfigName(e.target.value)}
                                     className="w-full p-2.5 bg-slate-950/70 border border-slate-700/50 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-blue-500"
                                 />
                             </div>
@@ -296,7 +307,9 @@ const LiveData = () => {
                                 <label className="block text-xs font-medium text-slate-400 mb-1.5">Link udostępniania (Udostępnij -&gt; Każda osoba mająca link)</label>
                                 <input
                                     type="text" placeholder="np. https://docs.google.com/spreadsheets/d/e/.../edit?usp=sharing"
-                                    value={url} onChange={(e) => setUrl(e.target.value)}
+                                    name="url"
+                                    value={editingConfig ? editingConfig.url ?? '' : url}
+                                    onChange={editingConfig ? handleEditConfigChange : (e) => setUrl(e.target.value)}
                                     className="w-full p-2.5 bg-slate-950/70 border border-slate-700/50 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-blue-500"
                                 />
                             </div>
@@ -305,7 +318,9 @@ const LiveData = () => {
                                     <label className="block text-xs font-medium text-slate-400 mb-1.5">Opcjonalnie: Zakładka</label>
                                     <input
                                         type="text" placeholder="np. Styczeń"
-                                        value={sheetName} onChange={(e) => setSheetName(e.target.value)}
+                                        name="sheetName"
+                                        value={editingConfig ? editingConfig.sheetName ?? '' : sheetName}
+                                        onChange={editingConfig ? handleEditConfigChange : (e) => setSheetName(e.target.value)}
                                         className="w-full p-2.5 bg-slate-950/70 border border-slate-700/50 rounded-lg text-sm font-mono text-slate-200 focus:outline-none focus:border-blue-500"
                                     />
                                 </div>
@@ -313,26 +328,48 @@ const LiveData = () => {
                                     <label className="block text-xs font-medium text-slate-400 mb-1.5">Opcjonalnie: Zakres</label>
                                     <input
                                         type="text" placeholder="np. A1:D20"
-                                        value={range} onChange={(e) => setRange(e.target.value)}
+                                        name="range"
+                                        value={editingConfig ? editingConfig.range ?? '' : range}
+                                        onChange={editingConfig ? handleEditConfigChange : (e) => setRange(e.target.value)}
                                         className="w-full p-2.5 bg-slate-950/70 border border-slate-700/50 rounded-lg text-sm font-mono text-slate-200 focus:outline-none focus:border-blue-500"
                                     />
                                 </div>
                             </div>
                             <div className="flex flex-wrap gap-3 justify-end pt-5 border-t border-slate-800/80 mt-4">
-                                <button
-                                    onClick={handleFetchSingle}
-                                    disabled={loading || !url}
-                                    className="px-4 py-2 font-medium text-xs rounded-lg transition-colors bg-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-50"
-                                >
-                                    Pobierz tylko ten
-                                </button>
-                                <button
-                                    onClick={handleSaveConfig}
-                                    disabled={!configName || !url}
-                                    className="px-4 py-2 font-medium text-xs rounded-lg transition-colors bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 border border-blue-500/20 disabled:opacity-50"
-                                >
-                                    Zapisz do pamięci
-                                </button>
+                                {editingConfig ? (
+                                    <>
+                                        <button
+                                            onClick={handleCancelEdit}
+                                            className="px-4 py-2 font-medium text-xs rounded-lg transition-colors bg-slate-800 text-slate-300 hover:bg-slate-700"
+                                        >
+                                            Cofnij
+                                        </button>
+                                        <button
+                                            onClick={handleUpdateConfig}
+                                            disabled={!editingConfig.name || !editingConfig.url}
+                                            className="px-4 py-2 font-medium text-xs rounded-lg transition-colors bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50"
+                                        >
+                                            Zapisz zmiany
+                                        </button>
+                                    </>
+                                ) : (
+                                    <>
+                                        <button
+                                            onClick={handleFetchSingle}
+                                            disabled={loading || !url}
+                                            className="px-4 py-2 font-medium text-xs rounded-lg transition-colors bg-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+                                        >
+                                            Pobierz tylko ten
+                                        </button>
+                                        <button
+                                            onClick={handleSaveConfig}
+                                            disabled={!configName || !url}
+                                            className="px-4 py-2 font-medium text-xs rounded-lg transition-colors bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 border border-blue-500/20 disabled:opacity-50"
+                                        >
+                                            Zapisz do pamięci
+                                        </button>
+                                    </>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -390,14 +427,6 @@ const LiveData = () => {
                         </div>
                     </div>
                 </div>
-
-                {isEditModalOpen && editingConfig && (
-                    <EditConfigModal
-                        config={editingConfig}
-                        onClose={() => setIsEditModalOpen(false)}
-                        onSave={handleUpdateConfig}
-                    />
-                )}
 
                 {jsonData && (
                     <div className="flex justify-center mt-8 space-x-4">

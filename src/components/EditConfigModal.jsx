@@ -1,11 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 
 const EditConfigModal = ({ config, onClose, onSave }) => {
     const [editedConfig, setEditedConfig] = useState(config);
 
     useEffect(() => {
-        setEditedConfig(config);
-    }, [config]);
+        const handleEscape = (event) => {
+            if (event.key === 'Escape') onClose();
+        };
+
+        document.addEventListener('keydown', handleEscape);
+        return () => document.removeEventListener('keydown', handleEscape);
+    }, [onClose]);
 
     const handleChange = (e) => {
         const { name, value } = e.target;
@@ -17,10 +23,16 @@ const EditConfigModal = ({ config, onClose, onSave }) => {
         onClose();
     };
 
-    return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 animate-fadeIn">
-            <div className="bg-slate-900 border border-slate-800/80 rounded-2xl shadow-2xl w-full max-w-lg mx-4">
-                <div className="px-6 py-5 border-b border-slate-800/80">
+    return createPortal(
+        <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 animate-fadeIn"
+            onClick={onClose}
+        >
+            <div
+                className="bg-slate-900 border border-slate-800/80 rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden"
+                onClick={(event) => event.stopPropagation()}
+            >
+                <div className="px-6 py-5 border-b border-slate-800/80 bg-slate-900/50">
                     <h3 className="text-lg font-bold text-white">Edytuj konfigurację</h3>
                 </div>
                 <div className="p-6 space-y-5">
@@ -82,7 +94,8 @@ const EditConfigModal = ({ config, onClose, onSave }) => {
                     </button>
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body,
     );
 };
 
