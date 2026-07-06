@@ -117,9 +117,29 @@ const LiveData = () => {
     const [range, setRange] = useState('');
     
     // Status & Output
-    const [jsonData, setJsonData] = useState(null);
+    const [jsonData, setJsonData] = useState(() => {
+        try {
+            const saved = localStorage.getItem('fetchedLiveData');
+            return saved ? JSON.parse(saved) : null;
+        } catch {
+            return null;
+        }
+    });
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
+
+    // Save fetched data to LocalStorage when changed
+    useEffect(() => {
+        if (jsonData) {
+            localStorage.setItem('fetchedLiveData', JSON.stringify(jsonData));
+        } else {
+            localStorage.removeItem('fetchedLiveData');
+        }
+    }, [jsonData]);
+
+    const clearFetchedData = () => {
+        setJsonData(null);
+    };
 
     // Saved Configs loaded from LocalStorage
     const [savedConfigs, setSavedConfigs] = useState(() => {
@@ -380,7 +400,7 @@ const LiveData = () => {
                 )}
 
                 {jsonData && (
-                    <div className="flex justify-center mt-8">
+                    <div className="flex justify-center mt-8 space-x-4">
                         <button
                             onClick={() => setIsJsonModalOpen(true)}
                             className="px-5 py-2.5 font-medium text-sm rounded-xl transition-colors flex items-center gap-2 shadow-lg bg-gradient-to-r from-blue-600 to-blue-500 text-white hover:from-blue-500 hover:to-blue-400 shadow-blue-500/20"
@@ -389,6 +409,15 @@ const LiveData = () => {
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
                             </svg>
                             Pokaż wygenerowany JSON
+                        </button>
+                        <button
+                            onClick={clearFetchedData}
+                            className="px-5 py-2.5 font-medium text-sm rounded-xl transition-colors flex items-center gap-2 shadow-lg bg-gradient-to-r from-red-600 to-red-500 text-white hover:from-red-500 hover:to-red-400 shadow-red-500/20"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-4v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                            Wyczyść dane
                         </button>
                     </div>
                 )}
