@@ -1,4 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import EditConfigModal from '../components/EditConfigModal';
+import JsonPreviewModal from '../components/JsonPreviewModal';
+import DataTable from '../components/DataTable';
 
 const fetchSheetData = async (url, sheetName, range) => {
     if (!url) {
@@ -128,10 +131,25 @@ const LiveData = () => {
         }
     });
 
+    const [isJsonModalOpen, setIsJsonModalOpen] = useState(false);
+    const [editingConfig, setEditingConfig] = useState(null);
+    const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+
     // Save configs to LocalStorage when changed
     useEffect(() => {
         localStorage.setItem('liveDataConfigs', JSON.stringify(savedConfigs));
     }, [savedConfigs]);
+
+    const handleEditClick = (config) => {
+        setEditingConfig(config);
+        setIsEditModalOpen(true);
+    };
+
+    const handleUpdateConfig = (updatedConfig) => {
+        setSavedConfigs(prev => prev.map(c => c.id === updatedConfig.id ? updatedConfig : c));
+        setIsEditModalOpen(false);
+        setEditingConfig(null);
+    };
 
     const handleSaveConfig = () => {
         if (!configName.trim() || !url.trim()) return;
@@ -325,15 +343,26 @@ const LiveData = () => {
                                                     <span className="truncate py-0.5">{config.url}</span>
                                                 </p>
                                             </div>
-                                            <button
-                                                onClick={() => handleRemoveConfig(config.id)}
-                                                className="text-xs text-rose-500 hover:text-rose-400 opacity-0 group-hover:opacity-100 p-2 bg-rose-500/10 rounded-lg transition-all flex-shrink-0"
-                                                title="Usuń"
-                                            >
-                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-4v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                                </svg>
-                                            </button>
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    onClick={() => handleEditClick(config)}
+                                                    className="text-xs text-blue-500 hover:text-blue-400 opacity-0 group-hover:opacity-100 p-2 bg-blue-500/10 rounded-lg transition-all flex-shrink-0"
+                                                    title="Edytuj"
+                                                >
+                                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.5L15.232 5.232z" />
+                                                    </svg>
+                                                </button>
+                                                <button
+                                                    onClick={() => handleRemoveConfig(config.id)}
+                                                    className="text-xs text-rose-500 hover:text-rose-400 opacity-0 group-hover:opacity-100 p-2 bg-rose-500/10 rounded-lg transition-all flex-shrink-0"
+                                                    title="Usuń"
+                                                >
+                                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-4v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                                    </svg>
+                                                </button>
+                                            </div>
                                         </li>
                                     ))}
                                 </ul>
@@ -342,26 +371,39 @@ const LiveData = () => {
                     </div>
                 </div>
 
+                {isEditModalOpen && editingConfig && (
+                    <EditConfigModal
+                        config={editingConfig}
+                        onClose={() => setIsEditModalOpen(false)}
+                        onSave={handleUpdateConfig}
+                    />
+                )}
+
                 {jsonData && (
-                    <div className="bg-slate-900 border border-slate-800/80 rounded-2xl shadow-xl overflow-hidden animate-fadeIn">
-                        <div className="px-6 py-5 border-b border-slate-800/80 bg-slate-900/50 flex flex-col md:flex-row justify-between items-start md:items-center w-full gap-4">
-                            <h3 className="text-lg font-bold text-white">Przetworzone Dane (JSON)</h3>
-                            <button
-                                onClick={downloadJson}
-                                className="inline-flex items-center justify-center gap-2 px-4 py-2 border border-slate-700 font-medium text-sm text-slate-300 bg-slate-800/50 rounded-lg hover:bg-slate-800 transition-colors"
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                                </svg>
-                                Pobierz wygenerowany JSON
-                            </button>
-                        </div>
-                        <div className="p-0 border-b border-slate-800/80 bg-slate-950 max-h-[600px] overflow-y-auto">
-                            <pre className="p-4 text-xs font-mono text-emerald-400">
-                                {JSON.stringify(jsonData, null, 2)}
-                            </pre>
-                        </div>
+                    <div className="flex justify-center mt-8">
+                        <button
+                            onClick={() => setIsJsonModalOpen(true)}
+                            className="px-5 py-2.5 font-medium text-sm rounded-xl transition-colors flex items-center gap-2 shadow-lg bg-gradient-to-r from-blue-600 to-blue-500 text-white hover:from-blue-500 hover:to-blue-400 shadow-blue-500/20"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                            </svg>
+                            Pokaż wygenerowany JSON
+                        </button>
                     </div>
+                )}
+
+                <div className="space-y-8 mt-8">
+                    {jsonData && Object.entries(jsonData).map(([title, data]) => (
+                        <DataTable key={title} title={title} data={data} />
+                    ))}
+                </div>
+
+                {isJsonModalOpen && (
+                    <JsonPreviewModal
+                        jsonData={jsonData}
+                        onClose={() => setIsJsonModalOpen(false)}
+                    />
                 )}
             </div>
         </div>

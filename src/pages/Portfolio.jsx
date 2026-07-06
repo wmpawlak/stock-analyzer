@@ -5,7 +5,7 @@ import PortfolioHistoryChart from '../components/portfolio/PortfolioHistoryChart
 
 const Portfolio = () => {
     return (
-        <div className="p-8 max-w-7xl mx-auto animate-fadeIn">
+        <div className="p-8 max-w-[1600px] mx-auto animate-fadeIn">
             <div className="mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div>
                     <h1 className="text-3xl font-bold bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
@@ -26,7 +26,7 @@ const Portfolio = () => {
             {/* Podsumowanie Aktywów w Tabeli */}
             <PortfolioTable />
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+            <div className="grid grid-cols-1 gap-8 mb-8">
                 {/* Wykres kołowy alokacji */}
                 <ChartCard title="Alokacja Portfela (Rozkład Aktywów)">
                     <AssetPieChart />
