@@ -3,6 +3,7 @@ import { normalizeText, parseNumericValue } from './number.js';
 export const FETCHED_LIVE_DATA_KEY = 'fetchedLiveData';
 export const LIVE_DATA_CHANGED_EVENT = 'stock-analyzer:live-data-changed';
 export const LIVE_ASSETS_KEY = 'Podsumowanie aktywów';
+export const LIVE_ASSET_CATEGORY_HISTORY_KEY = 'Historia kategorii aktywów';
 
 const findColumn = (keys, aliases) => {
   const normalizedAliases = aliases.map(normalizeText);
@@ -39,6 +40,49 @@ export const getLiveAssetsFromLiveData = (liveData) => {
       value,
     };
   }).filter(Boolean);
+};
+
+export const getAssetCategoryHistoryFromLiveData = (liveData) => {
+  if (!liveData || typeof liveData !== 'object') return { data: [], categories: [] };
+
+  const historyKey = Object.keys(liveData).find(
+    (key) => normalizeText(key) === normalizeText(LIVE_ASSET_CATEGORY_HISTORY_KEY),
+  );
+  const rows = historyKey ? liveData[historyKey] : null;
+  if (!Array.isArray(rows)) return { data: [], categories: [] };
+
+  const dateKey = rows.reduce((foundKey, row) => {
+    if (foundKey || !row || typeof row !== 'object') return foundKey;
+    return Object.keys(row).find((key) => normalizeText(key) === 'data') || null;
+  }, null);
+
+  if (!dateKey) return { data: [], categories: [] };
+
+  const categories = rows.reduce((headers, row) => {
+    if (!row || typeof row !== 'object') return headers;
+
+    Object.keys(row).forEach((key) => {
+      if (key !== dateKey && !headers.includes(key)) headers.push(key);
+    });
+
+    return headers;
+  }, []);
+
+  const data = rows.map((row) => {
+    const point = { date: String(row?.[dateKey] ?? '').trim() };
+
+    categories.forEach((category) => {
+      const value = parseNumericValue(row?.[category]);
+      point[category] = Number.isFinite(value) ? value : 0;
+    });
+
+    return point;
+  }).filter((point) => point.date);
+
+  return {
+    data: data.sort((a, b) => new Date(a.date) - new Date(b.date)),
+    categories,
+  };
 };
 
 export const readStoredLiveData = () => {

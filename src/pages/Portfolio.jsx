@@ -2,6 +2,7 @@ import PortfolioTable from '../components/portfolio/PortfolioTable';
 import ChartCard from '../components/portfolio/ChartCard';
 import AssetPieChart from '../components/portfolio/AssetPieChart';
 import PortfolioHistoryChart from '../components/portfolio/PortfolioHistoryChart';
+import AssetCategoryHistoryChart from '../components/portfolio/AssetCategoryHistoryChart';
 
 const Portfolio = () => {
     return (
@@ -35,6 +36,10 @@ const Portfolio = () => {
                 {/* Wykres historii wyceny */}
                 <ChartCard title="Historia wartości portfela">
                     <PortfolioHistoryChart />
+                </ChartCard>
+
+                <ChartCard title="Historia kategorii aktywów">
+                    <AssetCategoryHistoryChart />
                 </ChartCard>
             </div>
 

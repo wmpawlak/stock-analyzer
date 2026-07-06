@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { csvToObjects, parseCsv } from '../src/utils/csv.js';
-import { getLiveAssetsFromLiveData } from '../src/utils/liveData.js';
+import {
+  getAssetCategoryHistoryFromLiveData,
+  getLiveAssetsFromLiveData,
+} from '../src/utils/liveData.js';
 import { normalizeText, parseNumericValue } from '../src/utils/number.js';
 
 test('parseNumericValue handles Polish and US number formats', () => {
@@ -48,4 +51,22 @@ test('getLiveAssetsFromLiveData extracts portfolio summary assets', () => {
     { id: 'live-0-Gotówka', label: 'Gotówka', value: 1500.5 },
     { id: 'live-1-Akcje', label: 'Akcje', value: 2000 },
   ]);
+});
+
+test('getAssetCategoryHistoryFromLiveData extracts stacked category history', () => {
+  const liveData = {
+    'Historia kategorii aktywów': [
+      { Data: '2024-02-01', Gotówka: '1 000,00 zł', Akcje: '2 500,50 zł' },
+      { Data: '2024-01-01', Gotówka: '900,00 zł', Akcje: '2 000,00 zł', Obligacje: '300,00 zł' },
+      { Data: '', Gotówka: '123,00 zł' },
+    ],
+  };
+
+  assert.deepEqual(getAssetCategoryHistoryFromLiveData(liveData), {
+    categories: ['Gotówka', 'Akcje', 'Obligacje'],
+    data: [
+      { date: '2024-01-01', Gotówka: 900, Akcje: 2000, Obligacje: 300 },
+      { date: '2024-02-01', Gotówka: 1000, Akcje: 2500.5, Obligacje: 0 },
+    ],
+  });
 });
