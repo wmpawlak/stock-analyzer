@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
-import { useSelector } from 'react-redux';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
+import useDisplayedAssets from '../../hooks/useDisplayedAssets';
+import { formatCurrency } from '../../utils/number';
 
 const COLORS = [
   '#38bdf8',
@@ -14,14 +15,8 @@ const COLORS = [
   '#60a5fa',
   '#34d399',
   '#fb7185',
-  '#c084fc'
+  '#c084fc',
 ];
-
-const formatCurrency = (value) => new Intl.NumberFormat('pl-PL', {
-  style: 'currency',
-  currency: 'PLN',
-  maximumFractionDigits: 0,
-}).format(value);
 
 const CustomTooltip = ({ active, payload }) => {
   if (active && payload && payload.length) {
@@ -29,7 +24,7 @@ const CustomTooltip = ({ active, payload }) => {
     return (
       <div className="rounded-xl border border-slate-700 bg-slate-950/95 px-4 py-3 shadow-2xl backdrop-blur-sm">
         <p className="mb-1 text-sm font-semibold text-slate-100">{data.label}</p>
-        <p className="text-sm font-mono text-slate-300">{formatCurrency(data.value)}</p>
+        <p className="text-sm font-mono text-slate-300">{formatCurrency(data.value, 0)}</p>
         <p className="mt-1 text-xs font-medium text-sky-400">{`${(data.percent * 100).toFixed(2)}% portfela`}</p>
       </div>
     );
@@ -39,13 +34,11 @@ const CustomTooltip = ({ active, payload }) => {
 };
 
 const renderCustomizedLabel = ({ cx, cy, midAngle, outerRadius, percent, fill, label, value }) => {
-  if (percent < 0.045) {
-    return null;
-  }
+  if (percent < 0.045) return null;
 
-  const RADIAN = Math.PI / 180;
-  const sin = Math.sin(-RADIAN * midAngle);
-  const cos = Math.cos(-RADIAN * midAngle);
+  const radian = Math.PI / 180;
+  const sin = Math.sin(-radian * midAngle);
+  const cos = Math.cos(-radian * midAngle);
   const sx = cx + outerRadius * cos;
   const sy = cy + outerRadius * sin;
   const mx = cx + (outerRadius + 18) * cos;
@@ -77,14 +70,15 @@ const renderCustomizedLabel = ({ cx, cy, midAngle, outerRadius, percent, fill, l
         dy={10}
         fontSize={11}
       >
-        {`${(percent * 100).toFixed(1)}% · ${formatCurrency(value)}`}
+        {`${(percent * 100).toFixed(1)}% · ${formatCurrency(value, 0)}`}
       </text>
     </g>
   );
 };
 
 const AssetPieChart = () => {
-  const assets = useSelector((state) => state.portfolio.assets)
+  const { assets: displayedAssets } = useDisplayedAssets();
+  const assets = displayedAssets
     .filter((asset) => asset.value > 0)
     .sort((a, b) => b.value - a.value);
 
@@ -130,7 +124,7 @@ const AssetPieChart = () => {
             >
               {assets.map((entry, index) => (
                 <Cell
-                  key={`cell-${index}`}
+                  key={entry.id}
                   fill={COLORS[index % COLORS.length]}
                   style={{ outline: 'none' }}
                 />
@@ -145,7 +139,7 @@ const AssetPieChart = () => {
         <div className="mb-4 border-b border-slate-800/70 pb-3">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Legenda i udział</p>
           <p className="mt-2 text-sm text-slate-400">Łączna wartość portfela</p>
-          <p className="text-xl font-semibold text-slate-100">{formatCurrency(totalValue)}</p>
+          <p className="text-xl font-semibold text-slate-100">{formatCurrency(totalValue, 0)}</p>
         </div>
 
         <div className="space-y-3">
@@ -162,7 +156,7 @@ const AssetPieChart = () => {
                     />
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-slate-200">{asset.label}</p>
-                      <p className="text-xs font-mono text-slate-500">{formatCurrency(asset.value)}</p>
+                      <p className="text-xs font-mono text-slate-500">{formatCurrency(asset.value, 0)}</p>
                     </div>
                   </div>
                   <span className="shrink-0 text-sm font-semibold text-slate-100">{share.toFixed(1)}%</span>
@@ -186,4 +180,3 @@ const AssetPieChart = () => {
 };
 
 export default AssetPieChart;
-

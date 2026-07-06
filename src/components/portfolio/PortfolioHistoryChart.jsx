@@ -75,14 +75,11 @@ const PortfolioHistoryChart = () => {
     // --- DYNAMICZNE OBLICZANIE PUNKTU ZERO ---
     const globalMax = Math.max(0, ...data.map(i => Math.max(i.wartosc, i.wplacone, i.roznica)));
     const globalMin = Math.min(0, ...data.map(i => Math.min(i.wartosc, i.wplacone, i.roznica)));
-    let gradientOffset = 0;
-    if (globalMax <= 0) {
-        gradientOffset = 0;
-    } else if (globalMin >= 0) {
-        gradientOffset = 1;
-    } else {
-        gradientOffset = globalMax / (globalMax - globalMin);
-    }
+    const gradientOffset = (() => {
+        if (globalMax <= 0) return 0;
+        if (globalMin >= 0) return 1;
+        return globalMax / (globalMax - globalMin);
+    })();
 
     return (
         <div className="w-full h-96 relative">

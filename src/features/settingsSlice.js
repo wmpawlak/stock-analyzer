@@ -28,7 +28,7 @@ const settingsSlice = createSlice({
             localStorage.setItem('rangeTable', rangeTable);
             localStorage.setItem('rangeCharts', rangeCharts);
         },
-        clearSettings: (state) => {
+        clearSettings: () => {
             localStorage.clear();
             return {
                 geminiApiKey: '',
