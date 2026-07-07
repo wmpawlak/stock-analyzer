@@ -10,6 +10,11 @@ import {
 } from '../src/utils/liveData.js';
 import { normalizeText, parseNumericValue } from '../src/utils/number.js';
 import {
+  getPositionMetrics,
+  mapAlphaVantageOverview,
+  resolveInstrument,
+} from '../src/utils/investmentDetails.js';
+import {
   formatCompactAxisValue,
   formatPercentValue,
   getAdaptiveDateTicks,
@@ -29,6 +34,95 @@ test('normalizeText removes accents and punctuation for alias matching', () => {
   assert.equal(normalizeText('Podsumowanie aktyw\u00f3w'), 'podsumowanieaktywow');
   assert.equal(normalizeText(String.raw`Warto\u015b\u0107 netto`), 'wartoscnetto');
   assert.equal(normalizeText('Warto\u0139\u203a\u00c4\u2021 netto'), 'wartoscnetto');
+});
+
+test('resolveInstrument extracts display label and Alpha Vantage symbol', () => {
+  const row = {
+    'Akcje i inne instrumenty': 'NASDAQ:AAPL Apple Inc',
+    'Alpha Vantage Symbol': 'AAPL',
+  };
+
+  assert.deepEqual(resolveInstrument(row), {
+    label: 'Apple Inc',
+    quote: 'NASDAQ:AAPL',
+    symbol: 'AAPL',
+    url: 'https://www.google.com/finance/beta/quote/NASDAQ:AAPL',
+  });
+});
+
+test('getPositionMetrics calculates portfolio and result metrics', () => {
+  const row = {
+    'Akcje i inne instrumenty': 'NYSE:IBM IBM',
+    'Ilo\u015b\u0107': '10',
+    'Kurs kupna': '100,00',
+    'Koszt ca\u0142kowity': '1 000,00',
+    'Aktualny kurs': '120,00',
+    'Cena sprzeda\u017cy brutto': '1 200,00',
+    'Zysk/Strata': '200,00',
+    'Dywidenda netto': '50,00',
+    'Zysk/Strata %': '20,00%',
+  };
+  const portfolioRows = [
+    row,
+    { 'Cena sprzeda\u017cy brutto': '800,00' },
+  ];
+
+  assert.deepEqual(getPositionMetrics(row, portfolioRows), {
+    quantity: 10,
+    buyPrice: 100,
+    totalCost: 1000,
+    currentPrice: 120,
+    marketValue: 1200,
+    profitLoss: 200,
+    profitPercent: 20,
+    dividendNet: 50,
+    netProfit: null,
+    totalResult: 250,
+    portfolioShare: 60,
+    breakEvenPrice: 95,
+    positionAgeDays: null,
+    purchaseDate: '',
+  });
+});
+
+test('mapAlphaVantageOverview normalizes company overview fields', () => {
+  assert.deepEqual(mapAlphaVantageOverview({
+    Symbol: 'IBM',
+    Name: 'International Business Machines',
+    Description: 'A company description.',
+    Sector: 'Technology',
+    Industry: 'Information Technology Services',
+    MarketCapitalization: '200000000000',
+    PERatio: '22.5',
+    EPS: '8.11',
+    DividendYield: '0.031',
+    Beta: '0.7',
+    '52WeekHigh': '220.00',
+    '52WeekLow': '150.00',
+    PriceToBookRatio: '7.2',
+    PriceToSalesRatioTTM: '3.1',
+    ProfitMargin: '0.14',
+    ReturnOnEquityTTM: '0.31',
+    PayoutRatio: '0.62',
+  }), {
+    symbol: 'IBM',
+    name: 'International Business Machines',
+    description: 'A company description.',
+    sector: 'Technology',
+    industry: 'Information Technology Services',
+    marketCapitalization: '200000000000',
+    peRatio: '22.5',
+    eps: '8.11',
+    dividendYield: '0.031',
+    beta: '0.7',
+    fiftyTwoWeekHigh: '220.00',
+    fiftyTwoWeekLow: '150.00',
+    priceToBook: '7.2',
+    priceToSales: '3.1',
+    profitMargin: '0.14',
+    roe: '0.31',
+    payoutRatio: '0.62',
+  });
 });
 
 test('parseCsv handles quoted commas, escaped quotes and multiline cells', () => {

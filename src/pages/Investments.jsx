@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
+import InvestmentDetailsModal from '../components/investments/InvestmentDetailsModal.jsx';
 import useLiveData from '../hooks/useLiveData.js';
 import { notifyLiveDataChanged } from '../utils/liveData.js';
 
@@ -213,7 +214,24 @@ const parseAssetCell = (value) => {
     };
 };
 
-const TableCell = ({ header, value }) => {
+const DetailsButton = ({ onOpenDetails }) => (
+    <button
+        type="button"
+        onClick={(event) => {
+            event.stopPropagation();
+            onOpenDetails?.();
+        }}
+        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-700/60 bg-slate-950/60 text-slate-500 transition-colors hover:border-blue-500/40 hover:bg-blue-500/10 hover:text-blue-300"
+        title="Pokaz szczegoly inwestycji"
+        aria-label="Pokaz szczegoly inwestycji"
+    >
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M12 18a6 6 0 100-12 6 6 0 000 12z" />
+        </svg>
+    </button>
+);
+
+const TableCell = ({ header, value, onOpenDetails }) => {
     if (matchesAliases(header, PROFIT_PERCENT_ALIASES)) {
         const numericValue = parseNumericValue(value);
         const valueColor = !Number.isFinite(numericValue)
@@ -236,18 +254,29 @@ const TableCell = ({ header, value }) => {
     }
 
     const asset = parseAssetCell(value);
-    if (!asset.url) return <>{asset.label}</>;
+    if (!asset.url) {
+        return (
+            <span className="inline-flex items-center gap-2">
+                {onOpenDetails && <DetailsButton onOpenDetails={onOpenDetails} />}
+                <span>{asset.label}</span>
+            </span>
+        );
+    }
 
     return (
-        <a
-            href={asset.url}
-            target="_blank"
-            rel="noreferrer"
-            className="font-semibold text-blue-300 hover:text-blue-200 hover:underline underline-offset-4"
-            title={asset.quote}
-        >
-            {asset.label}
-        </a>
+        <span className="inline-flex items-center gap-2">
+            {onOpenDetails && <DetailsButton onOpenDetails={onOpenDetails} />}
+            <a
+                href={asset.url}
+                target="_blank"
+                rel="noreferrer"
+                className="font-semibold text-blue-300 hover:text-blue-200 hover:underline underline-offset-4"
+                title={asset.quote}
+                onClick={(event) => event.stopPropagation()}
+            >
+                {asset.label}
+            </a>
+        </span>
     );
 };
 
@@ -282,6 +311,7 @@ const FullTableModal = ({
     selectedTotalHeaders,
     onToggleColumn,
     onToggleTotalColumn,
+    onOpenDetails,
     onClose,
 }) => {
     useEffect(() => {
@@ -359,7 +389,11 @@ const FullTableModal = ({
                                     <tr key={rowIndex} className="hover:bg-slate-800/30 transition-colors">
                                         {headers.map((header) => (
                                             <td key={header} className="px-5 py-3 whitespace-nowrap">
-                                                <TableCell header={header} value={row[header]} />
+                                                <TableCell
+                                                    header={header}
+                                                    value={row[header]}
+                                                    onOpenDetails={isAssetColumn(header) ? () => onOpenDetails(row) : undefined}
+                                                />
                                             </td>
                                         ))}
                                     </tr>
@@ -403,7 +437,14 @@ const FullTableModal = ({
     );
 };
 
-const InvestmentTable = ({ portfolioName, rows, selectedHeaders, selectedTotalHeaders, onOpenFullTable }) => {
+const InvestmentTable = ({
+    portfolioName,
+    rows,
+    selectedHeaders,
+    selectedTotalHeaders,
+    onOpenFullTable,
+    onOpenDetails,
+}) => {
     const compactHeaders = useMemo(
         () => getSelectedHeaders(rows, selectedHeaders),
         [rows, selectedHeaders],
@@ -478,7 +519,11 @@ const InvestmentTable = ({ portfolioName, rows, selectedHeaders, selectedTotalHe
                             <tr key={rowIndex} className="hover:bg-slate-800/30 transition-colors">
                                 {compactHeaders.map((header) => (
                                     <td key={header} className="px-6 py-4 whitespace-nowrap">
-                                        <TableCell header={header} value={row[header]} />
+                                        <TableCell
+                                            header={header}
+                                            value={row[header]}
+                                            onOpenDetails={isAssetColumn(header) ? () => onOpenDetails(row) : undefined}
+                                        />
                                     </td>
                                 ))}
                             </tr>
@@ -510,6 +555,7 @@ const InvestmentTable = ({ portfolioName, rows, selectedHeaders, selectedTotalHe
 const Investments = () => {
     const liveData = useLiveData();
     const [activeModal, setActiveModal] = useState(null);
+    const [activeInvestment, setActiveInvestment] = useState(null);
     const [selectedColumnsByPortfolio, setSelectedColumnsByPortfolio] = useState(() => {
         try {
             const saved = localStorage.getItem(SELECTED_COLUMNS_STORAGE_KEY);
@@ -621,6 +667,11 @@ const Investments = () => {
                         selectedHeaders={selectedColumnsByPortfolio[portfolio.name]}
                         selectedTotalHeaders={totalColumnsByPortfolio[portfolio.name]}
                         onOpenFullTable={() => setActiveModal(portfolio)}
+                        onOpenDetails={(row) => setActiveInvestment({
+                            portfolioName: portfolio.name,
+                            row,
+                            portfolioRows: portfolio.rows,
+                        })}
                     />
                 ))}
             </div>
@@ -633,7 +684,21 @@ const Investments = () => {
                     selectedTotalHeaders={totalColumnsByPortfolio[activeModal.name]}
                     onToggleColumn={(header) => toggleCompactColumn(activeModal.name, header)}
                     onToggleTotalColumn={(header) => toggleTotalColumn(activeModal.name, header)}
+                    onOpenDetails={(row) => setActiveInvestment({
+                        portfolioName: activeModal.name,
+                        row,
+                        portfolioRows: activeModal.rows,
+                    })}
                     onClose={() => setActiveModal(null)}
+                />
+            )}
+
+            {activeInvestment && (
+                <InvestmentDetailsModal
+                    portfolioName={activeInvestment.portfolioName}
+                    row={activeInvestment.row}
+                    portfolioRows={activeInvestment.portfolioRows}
+                    onClose={() => setActiveInvestment(null)}
                 />
             )}
         </div>
