@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react';
 import {
   LIVE_DATA_CHANGED_EVENT,
-  readStoredLiveData,
+  readStoredResolvedLiveData,
 } from '../utils/liveData.js';
 
 const useLiveData = () => {
-  const [liveData, setLiveData] = useState(() => readStoredLiveData());
+  const [liveData, setLiveData] = useState(() => readStoredResolvedLiveData());
 
   useEffect(() => {
-    const refreshLiveData = () => setLiveData(readStoredLiveData());
+    const refreshLiveData = () => setLiveData(readStoredResolvedLiveData());
 
     window.addEventListener('storage', refreshLiveData);
     window.addEventListener(LIVE_DATA_CHANGED_EVENT, refreshLiveData);

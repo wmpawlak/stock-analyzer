@@ -1,17 +1,25 @@
 import { useMemo } from 'react';
-import { useSelector } from 'react-redux';
 import useLiveData from './useLiveData.js';
-import { getLiveAssetsFromLiveData } from '../utils/liveData.js';
+import {
+  getLiveAssetsFromLiveData,
+  readStoredDummyData,
+  readStoredLiveData,
+} from '../utils/liveData.js';
 
 const useDisplayedAssets = () => {
-  const assets = useSelector((state) => state.portfolio.assets);
   const liveData = useLiveData();
 
-  const liveAssets = useMemo(() => getLiveAssetsFromLiveData(liveData), [liveData]);
+  const displayedAssets = useMemo(() => getLiveAssetsFromLiveData(liveData), [liveData]);
+  const liveAssets = getLiveAssetsFromLiveData(readStoredLiveData());
+  const dummyAssets = getLiveAssetsFromLiveData(readStoredDummyData());
+  const isUsingLiveAssets = liveAssets.length > 0;
+  const isUsingDummyAssets = !isUsingLiveAssets && dummyAssets.length > 0;
 
   return {
-    assets: liveAssets.length > 0 ? liveAssets : assets,
-    isUsingLiveAssets: liveAssets.length > 0,
+    assets: displayedAssets,
+    isUsingLiveAssets,
+    isUsingDummyAssets,
+    sourceLabel: isUsingLiveAssets ? 'Dane Live' : (isUsingDummyAssets ? 'Dane dummy' : ''),
   };
 };
 

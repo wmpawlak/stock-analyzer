@@ -1,5 +1,4 @@
 import { useMemo } from 'react';
-import { useSelector } from 'react-redux';
 import {
   Area,
   CartesianGrid,
@@ -11,193 +10,176 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { formatCurrency, parseNumericValue } from '../../utils/number.js';
+import useLiveData from '../../hooks/useLiveData.js';
+import { getPortfolioHistoryFromLiveData } from '../../utils/liveData.js';
+import { normalizeText, parseNumericValue } from '../../utils/number.js';
+import ChartTooltip from './ChartTooltip.jsx';
+import {
+  CHART_AXIS,
+  CHART_COLORS,
+  formatCompactAxisValue,
+  formatDateTick,
+  getAdaptiveDateTicks,
+  getRoundedAxisTicks,
+  toIndexedChartData,
+} from './chartConfig.js';
 
-const COLORS = {
-  value: '#10b981',
-  paid: '#ef4444',
-  profit: '#3b82f6',
-  loss: '#ef4444',
-};
+const DATE_ALIASES = ['date', 'Data'];
+const VALUE_ALIASES = ['wartosc', 'Warto\u015b\u0107', 'Wartosc', 'Warto\u015b\u0107 portfela', 'Value'];
+const PAID_ALIASES = ['wplacone', 'Wp\u0142acone \u0142\u0105cz.', 'Wplacone lacz.', 'Wp\u0142acone \u0142\u0105cznie', 'Paid'];
+const DIFF_ALIASES = ['roznica', 'R\u00f3\u017cnica', 'Roznica', 'Zysk / Strata', 'Difference'];
 
-const MOCK_DATA = [
-  { Data: '2023-01-01', Wartość: '48 000 zł', 'Wpłacone łącz.': '50 000 zł', Różnica: '-2 000 zł' },
-  { Data: '2023-04-01', Wartość: '62 500 zł', 'Wpłacone łącz.': '60 000 zł', Różnica: '2 500 zł' },
-  { Data: '2023-08-01', Wartość: '85 000 zł', 'Wpłacone łącz.': '80 000 zł', Różnica: '5 000 zł' },
-  { Data: '2024-01-01', Wartość: '105 200 zł', 'Wpłacone łącz.': '95 000 zł', Różnica: '10 200 zł' },
-  { Data: '2024-05-01', Wartość: '131 581 zł', 'Wpłacone łącz.': '110 000 zł', Różnica: '21 581 zł' },
-  { Data: '2024-08-01', Wartość: '143 765 zł', 'Wpłacone łącz.': '115 000 zł', Różnica: '28 765 zł' },
-];
+const getFirstValue = (row, aliases) => {
+  if (!row || typeof row !== 'object') return undefined;
 
-const VALUE_KEYS = ['Wartość', 'WartoĹ›Ä‡'];
-const PAID_KEYS = ['Wpłacone łącz.', 'WpĹ‚acone Ĺ‚Ä…cz.'];
-const DIFF_KEYS = ['Różnica', 'RĂłĹĽnica'];
-
-const getFirstValue = (row, keys) => {
-  const key = keys.find((candidate) => row[candidate] !== undefined);
+  const normalizedAliases = aliases.map(normalizeText);
+  const key = Object.keys(row).find((candidate) => normalizedAliases.includes(normalizeText(candidate)));
   return key ? row[key] : undefined;
 };
 
-const formatAxisValue = (value) => {
-  if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(0)}k`;
-  return value;
-};
-
-const getDomain = (data) => {
-  const values = data.flatMap((point) => [point.wartosc, point.wplacone, point.roznica]);
-  const minValue = Math.min(0, ...values);
-  const maxValue = Math.max(0, ...values);
-
-  return {
-    min: Math.floor(minValue / 50_000) * 50_000,
-    max: Math.ceil(maxValue / 50_000) * 50_000,
-  };
-};
-
-const getHorizontalGridValues = ({ min, max }) => {
-  const values = [];
-  for (let value = min; value <= max; value += 50_000) {
-    values.push(value);
-  }
-  return values;
-};
-
-const CustomTooltip = ({ active, payload, label }) => {
+const CustomTooltip = ({ active, payload }) => {
   if (!active || !payload?.length) return null;
 
   const rows = payload.filter((entry) => Number.isFinite(entry.value));
   const delta = rows.find((entry) => entry.dataKey === 'roznica');
 
   return (
-    <div className="min-w-[240px] rounded-xl border border-slate-700 bg-slate-950/95 px-4 py-3 shadow-2xl backdrop-blur-sm">
-      <p className="mb-3 border-b border-slate-800 pb-2 text-sm font-bold text-slate-100">{label}</p>
-      <div className="space-y-2">
-        {rows.filter((entry) => entry.dataKey !== 'roznica').map((entry) => (
-          <div key={entry.dataKey} className="flex items-center justify-between gap-5 text-xs">
-            <span className="flex min-w-0 items-center gap-2 text-slate-300">
-              <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: entry.color }} />
-              <span className="truncate">{entry.name}</span>
-            </span>
-            <span className="shrink-0 font-mono font-semibold text-slate-100">
-              {formatCurrency(entry.value, 0)}
-            </span>
-          </div>
-        ))}
-      </div>
-      {delta && (
-        <div className="mt-3 flex items-center justify-between border-t border-slate-800 pt-2 text-xs">
-          <span className="font-medium text-slate-400">Zysk / Strata</span>
-          <span className={`font-mono font-bold ${delta.value >= 0 ? 'text-blue-300' : 'text-rose-300'}`}>
-            {delta.value >= 0 ? '+' : ''}
-            {formatCurrency(delta.value, 0)}
-          </span>
-        </div>
-      )}
-    </div>
+    <ChartTooltip
+      active={active}
+      payload={payload}
+      title={payload[0]?.payload?.date}
+      rows={rows.filter((entry) => entry.dataKey !== 'roznica').map((entry) => ({
+        key: entry.dataKey,
+        name: entry.name,
+        color: entry.color,
+        value: entry.value,
+      }))}
+      total={delta && {
+        label: 'Zysk / Strata',
+        value: delta.value,
+        prefix: delta.value >= 0 ? '+' : '',
+        valueClassName: delta.value >= 0 ? 'text-emerald-300' : 'text-rose-300',
+      }}
+    />
   );
 };
 
 const PortfolioHistoryChart = () => {
-  const reduxHistory = useSelector((state) => state.portfolio.portfolioHistory);
-  const isMockData = !reduxHistory || reduxHistory.length === 0;
-  const rawData = isMockData ? MOCK_DATA : reduxHistory;
+  const liveData = useLiveData();
+  const rawData = useMemo(() => getPortfolioHistoryFromLiveData(liveData).data, [liveData]);
 
-  const data = useMemo(() => rawData.map((item, index) => ({
-    id: index,
-    date: item.Data,
-    wartosc: parseNumericValue(getFirstValue(item, VALUE_KEYS)),
-    wplacone: parseNumericValue(getFirstValue(item, PAID_KEYS)),
-    roznica: parseNumericValue(getFirstValue(item, DIFF_KEYS)),
-  })).map((point) => ({
-    ...point,
-    wartosc: Number.isFinite(point.wartosc) ? point.wartosc : 0,
-    wplacone: Number.isFinite(point.wplacone) ? point.wplacone : 0,
-    roznica: Number.isFinite(point.roznica) ? point.roznica : 0,
-  })).sort((a, b) => new Date(a.date) - new Date(b.date)), [rawData]);
+  const data = useMemo(() => {
+    const points = rawData.map((item, index) => ({
+      id: index,
+      date: getFirstValue(item, DATE_ALIASES),
+      wartosc: parseNumericValue(getFirstValue(item, VALUE_ALIASES)),
+      wplacone: parseNumericValue(getFirstValue(item, PAID_ALIASES)),
+      roznica: parseNumericValue(getFirstValue(item, DIFF_ALIASES)),
+    })).map((point) => ({
+      ...point,
+      wplacone: Number.isFinite(point.wplacone) ? point.wplacone : 0,
+      roznica: Number.isFinite(point.roznica) ? point.roznica : 0,
+    })).filter((point) => Number.isFinite(point.wartosc));
 
-  const domain = useMemo(() => getDomain(data), [data]);
-  const horizontalGridValues = useMemo(() => getHorizontalGridValues(domain), [domain]);
+    return toIndexedChartData(points);
+  }, [rawData]);
+
+  const valueAxis = useMemo(() => getRoundedAxisTicks(
+    data.flatMap((point) => [point.wartosc, point.wplacone, point.roznica]),
+  ), [data]);
+  const horizontalGridValues = valueAxis.ticks;
+  const dateTicks = useMemo(() => getAdaptiveDateTicks(data), [data]);
   const gradientOffset = (() => {
-    if (domain.max <= 0) return 0;
-    if (domain.min >= 0) return 1;
-    return domain.max / (domain.max - domain.min);
+    if (valueAxis.max <= 0) return 0;
+    if (valueAxis.min >= 0) return 1;
+    return valueAxis.max / (valueAxis.max - valueAxis.min);
   })();
 
-  return (
-    <div className="h-[460px] w-full relative">
-      {isMockData && (
-        <div className="absolute top-2 right-2 z-10 bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[10px] font-bold px-3 py-1 rounded-lg">
-          DANE PRZYKŁADOWE
+  if (data.length === 0) {
+    return (
+      <div className="flex h-80 w-full items-center justify-center text-slate-500">
+        <div className="text-center">
+          <svg xmlns="http://www.w3.org/2000/svg" className="mx-auto h-12 w-12 text-slate-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M3 13.5l6-6 4 4L21 3.5M21 3.5h-6m6 0v6M3 20.5h18" />
+          </svg>
+          <p className="mt-2 text-sm">{'Brak danych dla zakresu "Historia wyceny portfela".'}</p>
         </div>
-      )}
+      </div>
+    );
+  }
+
+  return (
+    <div className={`relative ${CHART_AXIS.heightClass} w-full`}>
       <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={data} margin={{ top: 15, right: 24, bottom: 8, left: 0 }}>
+        <ComposedChart data={data} margin={CHART_AXIS.margin}>
           <defs>
             <linearGradient id="portfolioHistoryValueFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={COLORS.value} stopOpacity={0.46} />
-              <stop offset="100%" stopColor={COLORS.value} stopOpacity={0.1} />
+              <stop offset="0%" stopColor={CHART_COLORS.portfolioValue} stopOpacity={0.46} />
+              <stop offset="100%" stopColor={CHART_COLORS.portfolioValue} stopOpacity={0.1} />
             </linearGradient>
             <linearGradient id="portfolioHistoryPaidFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={COLORS.paid} stopOpacity={0.38} />
-              <stop offset="100%" stopColor={COLORS.paid} stopOpacity={0.08} />
+              <stop offset="0%" stopColor={CHART_COLORS.paid} stopOpacity={0.34} />
+              <stop offset="100%" stopColor={CHART_COLORS.paid} stopOpacity={0.08} />
             </linearGradient>
             <linearGradient id="portfolioHistoryDeltaFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset={0} stopColor={COLORS.profit} stopOpacity={0.46} />
-              <stop offset={gradientOffset} stopColor={COLORS.profit} stopOpacity={0.1} />
-              <stop offset={gradientOffset} stopColor={COLORS.loss} stopOpacity={0.1} />
-              <stop offset={1} stopColor={COLORS.loss} stopOpacity={0.46} />
+              <stop offset={0} stopColor={CHART_COLORS.profit} stopOpacity={0.46} />
+              <stop offset={gradientOffset} stopColor={CHART_COLORS.profit} stopOpacity={0.1} />
+              <stop offset={gradientOffset} stopColor={CHART_COLORS.loss} stopOpacity={0.1} />
+              <stop offset={1} stopColor={CHART_COLORS.loss} stopOpacity={0.46} />
             </linearGradient>
             <linearGradient id="portfolioHistoryDeltaStroke" x1="0" y1="0" x2="0" y2="1">
-              <stop offset={gradientOffset} stopColor={COLORS.profit} stopOpacity={1} />
-              <stop offset={gradientOffset} stopColor={COLORS.loss} stopOpacity={1} />
+              <stop offset={gradientOffset} stopColor={CHART_COLORS.profit} stopOpacity={1} />
+              <stop offset={gradientOffset} stopColor={CHART_COLORS.loss} stopOpacity={1} />
             </linearGradient>
           </defs>
-          <CartesianGrid strokeDasharray="3 3" vertical stroke="#1e293b" opacity={0.35} />
+          <CartesianGrid {...CHART_AXIS.grid} />
           <XAxis
-            dataKey="date"
-            tick={{ fill: '#64748b', fontSize: 10 }}
-            tickMargin={10}
+            dataKey="xIndex"
+            type="number"
+            domain={['dataMin', 'dataMax']}
+            ticks={dateTicks}
+            tickFormatter={(value) => formatDateTick(value, data)}
+            tick={CHART_AXIS.tick}
+            tickMargin={CHART_AXIS.tickMargin}
             axisLine={false}
             tickLine={false}
-            interval={0}
           />
           <YAxis
-            tickFormatter={formatAxisValue}
-            tick={{ fill: '#64748b', fontSize: 10 }}
+            tickFormatter={formatCompactAxisValue}
+            tick={CHART_AXIS.tick}
             axisLine={false}
             tickLine={false}
-            width={44}
+            width={CHART_AXIS.yAxisWidth}
             type="number"
-            domain={[domain.min, domain.max]}
+            domain={[valueAxis.min, valueAxis.max]}
             ticks={horizontalGridValues}
             allowDataOverflow
           />
-          <ReferenceLine y={0} stroke="#cbd5e1" strokeWidth={1.2} strokeOpacity={0.24} />
-          <Tooltip content={<CustomTooltip />} cursor={{ stroke: '#334155', strokeWidth: 1, strokeDasharray: '4 4' }} />
+          <ReferenceLine y={0} {...CHART_AXIS.zeroLine} />
+          <Tooltip content={<CustomTooltip />} cursor={CHART_AXIS.cursor} />
           <Legend
-            wrapperStyle={{ paddingTop: 16, fontSize: 12 }}
+            wrapperStyle={CHART_AXIS.legendWrapper}
             iconType="circle"
             formatter={(value) => <span className="text-slate-300">{value}</span>}
           />
           <Area
             type="monotone"
             dataKey="wartosc"
-            name="Wartość Portfela"
-            stroke={COLORS.value}
+            name={'Warto\u015b\u0107 portfela'}
+            stroke={CHART_COLORS.portfolioValue}
             strokeWidth={2}
             fill="url(#portfolioHistoryValueFill)"
-            activeDot={{ r: 4, fill: COLORS.value, stroke: '#0f172a', strokeWidth: 2 }}
+            activeDot={{ r: 4, fill: CHART_COLORS.portfolioValue, stroke: '#0f172a', strokeWidth: 2 }}
           />
           <Area
             type="monotone"
             dataKey="wplacone"
-            name="Wpłacone"
-            stroke={COLORS.paid}
+            name={'Wp\u0142acone'}
+            stroke={CHART_COLORS.paid}
             strokeWidth={1.5}
             strokeDasharray="4 4"
             fill="url(#portfolioHistoryPaidFill)"
-            activeDot={{ r: 4, fill: COLORS.paid, stroke: '#0f172a', strokeWidth: 2 }}
+            activeDot={{ r: 4, fill: CHART_COLORS.paid, stroke: '#0f172a', strokeWidth: 2 }}
           />
           <Area
             type="monotone"
@@ -214,20 +196,18 @@ const PortfolioHistoryChart = () => {
                   cx={cx}
                   cy={cy}
                   r={5}
-                  fill={isPositive ? COLORS.profit : COLORS.loss}
+                  fill={isPositive ? CHART_COLORS.profit : CHART_COLORS.loss}
                   stroke="#0f172a"
                   strokeWidth={2}
                 />
               );
             }}
           />
-          {data.map((point) => (
+          {dateTicks.map((date) => (
             <ReferenceLine
-              key={`portfolio-history-vertical-grid-${point.date}`}
-              x={point.date}
-              stroke="#cbd5e1"
-              strokeDasharray="2 4"
-              strokeOpacity={0.18}
+              key={`portfolio-history-vertical-grid-${date}`}
+              x={date}
+              {...CHART_AXIS.referenceLine}
               ifOverflow="extendDomain"
             />
           ))}
@@ -235,9 +215,7 @@ const PortfolioHistoryChart = () => {
             <ReferenceLine
               key={`portfolio-history-horizontal-grid-${value}`}
               y={value}
-              stroke="#cbd5e1"
-              strokeDasharray="2 4"
-              strokeOpacity={0.18}
+              {...CHART_AXIS.referenceLine}
               ifOverflow="extendDomain"
             />
           ))}

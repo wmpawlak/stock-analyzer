@@ -1,36 +1,34 @@
 import { useMemo } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
-import useDisplayedAssets from '../../hooks/useDisplayedAssets';
-import { formatCurrency } from '../../utils/number';
-
-const COLORS = [
-  '#38bdf8',
-  '#22c55e',
-  '#f59e0b',
-  '#f43f5e',
-  '#a78bfa',
-  '#14b8a6',
-  '#f97316',
-  '#eab308',
-  '#60a5fa',
-  '#34d399',
-  '#fb7185',
-  '#c084fc',
-];
+import useDisplayedAssets from '../../hooks/useDisplayedAssets.js';
+import { formatCurrency } from '../../utils/number.js';
+import ChartTooltip from './ChartTooltip.jsx';
+import { CHART_AXIS, CHART_COLORS, formatPercentValue } from './chartConfig.js';
 
 const CustomTooltip = ({ active, payload }) => {
-  if (active && payload && payload.length) {
-    const data = payload[0].payload;
-    return (
-      <div className="rounded-xl border border-slate-700 bg-slate-950/95 px-4 py-3 shadow-2xl backdrop-blur-sm">
-        <p className="mb-1 text-sm font-semibold text-slate-100">{data.label}</p>
-        <p className="text-sm font-mono text-slate-300">{formatCurrency(data.value, 0)}</p>
-        <p className="mt-1 text-xs font-medium text-sky-400">{`${(data.percent * 100).toFixed(2)}% portfela`}</p>
-      </div>
-    );
-  }
+  if (!active || !payload?.length) return null;
 
-  return null;
+  const data = payload[0].payload;
+  const percent = data.percent * 100;
+
+  return (
+    <ChartTooltip
+      active={active}
+      payload={payload}
+      title={data.label}
+      rows={[{
+        key: data.id,
+        name: 'Wartość',
+        color: payload[0].color,
+        value: data.value,
+      }]}
+      total={{
+        label: 'Udział',
+        value: percent,
+        formatter: formatPercentValue,
+      }}
+    />
+  );
 };
 
 const renderCustomizedLabel = ({ cx, cy, midAngle, outerRadius, percent, fill, label, value }) => {
@@ -70,7 +68,7 @@ const renderCustomizedLabel = ({ cx, cy, midAngle, outerRadius, percent, fill, l
         dy={10}
         fontSize={11}
       >
-        {`${(percent * 100).toFixed(1)}% · ${formatCurrency(value, 0)}`}
+        {`${formatPercentValue(percent * 100)} · ${formatCurrency(value, 0)}`}
       </text>
     </g>
   );
@@ -102,9 +100,9 @@ const AssetPieChart = () => {
 
   return (
     <div className="grid w-full grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.5fr)_320px] xl:items-center">
-      <div className="h-[480px] w-full">
+      <div className={`${CHART_AXIS.heightClass} w-full`}>
         <ResponsiveContainer width="100%" height="100%">
-          <PieChart margin={{ top: 30, right: 140, bottom: 30, left: 140 }}>
+          <PieChart margin={CHART_AXIS.pieMargin}>
             <Pie
               data={assets}
               cx="50%"
@@ -125,7 +123,7 @@ const AssetPieChart = () => {
               {assets.map((entry, index) => (
                 <Cell
                   key={entry.id}
-                  fill={COLORS[index % COLORS.length]}
+                  fill={CHART_COLORS.categoryPalette[index % CHART_COLORS.categoryPalette.length]}
                   style={{ outline: 'none' }}
                 />
               ))}
@@ -145,6 +143,7 @@ const AssetPieChart = () => {
         <div className="space-y-3">
           {assets.map((asset, index) => {
             const share = totalValue > 0 ? (asset.value / totalValue) * 100 : 0;
+            const color = CHART_COLORS.categoryPalette[index % CHART_COLORS.categoryPalette.length];
 
             return (
               <div key={asset.id} className="rounded-xl border border-slate-800/60 bg-slate-900/70 px-3 py-3">
@@ -152,21 +151,21 @@ const AssetPieChart = () => {
                   <div className="flex min-w-0 items-start gap-3">
                     <span
                       className="mt-1 h-3 w-3 shrink-0 rounded-full"
-                      style={{ backgroundColor: COLORS[index % COLORS.length] }}
+                      style={{ backgroundColor: color }}
                     />
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-slate-200">{asset.label}</p>
                       <p className="text-xs font-mono text-slate-500">{formatCurrency(asset.value, 0)}</p>
                     </div>
                   </div>
-                  <span className="shrink-0 text-sm font-semibold text-slate-100">{share.toFixed(1)}%</span>
+                  <span className="shrink-0 text-sm font-semibold text-slate-100">{formatPercentValue(share)}</span>
                 </div>
                 <div className="h-2 overflow-hidden rounded-full bg-slate-800">
                   <div
                     className="h-full rounded-full"
                     style={{
                       width: `${share}%`,
-                      backgroundColor: COLORS[index % COLORS.length],
+                      backgroundColor: color,
                     }}
                   />
                 </div>

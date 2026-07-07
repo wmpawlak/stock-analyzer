@@ -12,71 +12,21 @@ import {
 } from 'recharts';
 import useLiveData from '../../hooks/useLiveData.js';
 import { getAssetCategoryHistoryFromLiveData } from '../../utils/liveData.js';
-import { formatCurrency } from '../../utils/number.js';
+import ChartTooltip from './ChartTooltip.jsx';
+import {
+  CHART_AXIS,
+  CHART_COLORS,
+  PERCENT_AXIS_TICKS,
+  formatCompactAxisValue,
+  formatCurrencyValue,
+  formatDateTick,
+  formatPercentValue,
+  getAdaptiveDateTicks,
+  getRoundedAxisTicks,
+  toIndexedChartData,
+} from './chartConfig.js';
 
-const COLORS = [
-  '#06b6d4',
-  '#84cc16',
-  '#f97316',
-  '#ec4899',
-  '#8b5cf6',
-  '#10b981',
-  '#facc15',
-  '#ef4444',
-  '#0ea5e9',
-  '#d946ef',
-  '#65a30d',
-  '#fb923c',
-];
-
-const Y_AXIS_ROUNDING_STEP = 50_000;
-const X_AXIS_TICK_STEP = 3;
-const PERCENT_TICKS = [20, 40, 60, 80, 100];
-
-const formatAxisValue = (value) => {
-  if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(0)}k`;
-  return value;
-};
-
-const formatPercentValue = (value) => `${value.toFixed(value >= 10 ? 0 : 1)}%`;
-
-const parseChartDate = (dateValue) => {
-  if (dateValue instanceof Date) return dateValue;
-  if (typeof dateValue === 'number') return new Date(dateValue);
-
-  const rawDate = String(dateValue ?? '').trim();
-  const polishDateMatch = rawDate.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
-
-  if (polishDateMatch) {
-    const [, day, month, year] = polishDateMatch;
-    return new Date(Number(year), Number(month) - 1, Number(day));
-  }
-
-  return new Date(rawDate);
-};
-
-const getChartData = (data) => data
-  .map((point) => {
-    const parsedDate = parseChartDate(point.date);
-
-    return {
-      ...point,
-      dateValue: parsedDate.getTime(),
-    };
-  })
-  .filter((point) => Number.isFinite(point.dateValue))
-  .sort((a, b) => a.dateValue - b.dateValue)
-  .map((point, index) => ({
-    ...point,
-    xIndex: index,
-  }));
-
-const getEveryThirdDateTicks = (data) => data
-  .filter((_, index) => index % X_AXIS_TICK_STEP === 0)
-  .map((point) => point.xIndex);
-
-const formatDateTick = (tickValue, data) => data[tickValue]?.date ?? '';
+const getChartData = (data) => toIndexedChartData(data);
 
 const getSortedCategories = (data, categories) => {
   const lastPoint = data.at(-1);
@@ -100,22 +50,13 @@ const getPercentData = (data, categories) => data.map((point) => {
   });
 });
 
-const getStackedScale = (data, categories) => {
-  const maxValue = data.reduce((max, point) => {
-    const total = categories.reduce((sum, category) => sum + (point[category] || 0), 0);
-    return Math.max(max, total);
-  }, 0);
+const getStackedScale = (data, categories) => getRoundedAxisTicks(
+  data.map((point) => categories.reduce((sum, category) => sum + (point[category] || 0), 0)),
+);
 
-  if (maxValue <= 0) return { maxDomain: Y_AXIS_ROUNDING_STEP, ticks: [] };
-
-  const maxDomain = Math.ceil(maxValue / Y_AXIS_ROUNDING_STEP) * Y_AXIS_ROUNDING_STEP;
-  const tickCount = Math.max(1, Math.ceil(maxDomain / Y_AXIS_ROUNDING_STEP));
-
-  return {
-    maxDomain,
-    ticks: Array.from({ length: tickCount }, (_, index) => Y_AXIS_ROUNDING_STEP * (index + 1)),
-  };
-};
+const getCategoryColor = (category, categories) => (
+  CHART_COLORS.categoryPalette[categories.indexOf(category) % CHART_COLORS.categoryPalette.length]
+);
 
 const CustomTooltip = ({ active, payload, label, isPercentMode }) => {
   if (!active || !payload?.length) return null;
@@ -127,30 +68,50 @@ const CustomTooltip = ({ active, payload, label, isPercentMode }) => {
   const displayDate = payload[0]?.payload?.date || label;
 
   return (
-    <div className="min-w-[240px] rounded-xl border border-slate-700 bg-slate-950/95 px-4 py-3 shadow-2xl backdrop-blur-sm">
-      <p className="mb-3 border-b border-slate-800 pb-2 text-sm font-bold text-slate-100">{displayDate}</p>
-      <div className="space-y-2">
-        {visiblePayload.map((entry) => (
-          <div key={entry.dataKey} className="flex items-center justify-between gap-5 text-xs">
-            <span className="flex min-w-0 items-center gap-2 text-slate-300">
-              <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: entry.color }} />
-              <span className="truncate">{entry.name}</span>
-            </span>
-            <span className="shrink-0 font-mono font-semibold text-slate-100">
-              {isPercentMode ? formatPercentValue(entry.value) : formatCurrency(entry.value, 0)}
-            </span>
-          </div>
-        ))}
-      </div>
-      <div className="mt-3 flex items-center justify-between border-t border-slate-800 pt-2 text-xs">
-        <span className="font-medium text-slate-400">Suma</span>
-        <span className="font-mono font-bold text-blue-300">
-          {isPercentMode ? formatPercentValue(total) : formatCurrency(total, 0)}
-        </span>
-      </div>
-    </div>
+    <ChartTooltip
+      active={active}
+      payload={payload}
+      title={displayDate}
+      rows={visiblePayload.map((entry) => ({
+        key: entry.dataKey,
+        name: entry.name,
+        color: entry.color,
+        value: entry.value,
+      }))}
+      total={{
+        label: 'Suma',
+        value: total,
+        formatter: isPercentMode ? formatPercentValue : formatCurrencyValue,
+      }}
+      valueFormatter={isPercentMode ? formatPercentValue : formatCurrencyValue}
+    />
   );
 };
+
+const CustomLegend = ({ items, selectedCategory, onSelect }) => (
+  <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 pt-4 text-xs">
+    {items.map((item) => {
+      const isSelected = selectedCategory === item.value;
+
+      return (
+        <button
+          key={item.value}
+          type="button"
+          onClick={() => onSelect(item.value)}
+          className={`inline-flex items-center gap-1.5 transition-colors ${
+            isSelected ? 'font-semibold text-slate-100' : 'text-slate-300 hover:text-slate-100'
+          }`}
+        >
+          <span
+            className="h-3.5 w-3.5 rounded-full"
+            style={{ backgroundColor: item.color }}
+          />
+          <span>{item.value}</span>
+        </button>
+      );
+    })}
+  </div>
+);
 
 const AssetCategoryHistoryChart = () => {
   const [selectedCategory, setSelectedCategory] = useState(null);
@@ -165,22 +126,27 @@ const AssetCategoryHistoryChart = () => {
     () => getSortedCategories(chartData, categories),
     [chartData, categories],
   );
+  const legendItems = useMemo(() => sortedCategories.map((category) => ({
+    color: getCategoryColor(category, categories),
+    value: category,
+  })), [sortedCategories, categories]);
   const percentData = useMemo(
     () => getPercentData(chartData, sortedCategories),
     [chartData, sortedCategories],
   );
   const visibleData = isPercentMode ? percentData : chartData;
-  const { maxDomain, ticks: horizontalGridValues } = useMemo(
+  const { maxDomain, ticks: axisTicks } = useMemo(
     () => {
-      if (isPercentMode) return { maxDomain: 100, ticks: PERCENT_TICKS };
+      if (isPercentMode) return { maxDomain: 100, ticks: PERCENT_AXIS_TICKS };
 
-      return getStackedScale(visibleData, sortedCategories);
+      const axis = getStackedScale(visibleData, sortedCategories);
+      return { maxDomain: axis.max, ticks: axis.ticks };
     },
     [isPercentMode, visibleData, sortedCategories],
   );
-  const dateTicks = useMemo(() => getEveryThirdDateTicks(chartData), [chartData]);
-  const handleLegendClick = (entry) => {
-    const category = entry?.value;
+  const horizontalGridValues = axisTicks.filter((tick) => tick !== 0);
+  const dateTicks = useMemo(() => getAdaptiveDateTicks(chartData), [chartData]);
+  const handleLegendClick = (category) => {
     if (!category) return;
 
     setSelectedCategory((currentCategory) => (
@@ -202,7 +168,7 @@ const AssetCategoryHistoryChart = () => {
   }
 
   return (
-    <div className="relative h-[460px] w-full pt-10">
+    <div className={`relative ${CHART_AXIS.heightClass} w-full pt-10`}>
       <div className="absolute right-0 top-0 z-10 inline-flex rounded-lg border border-slate-700 bg-slate-900/90 p-1 text-xs font-semibold shadow-lg">
         <button
           type="button"
@@ -220,64 +186,63 @@ const AssetCategoryHistoryChart = () => {
         </button>
       </div>
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={visibleData} margin={{ top: 15, right: 24, bottom: 8, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" vertical stroke="#1e293b" opacity={0.35} />
+        <AreaChart data={visibleData} margin={CHART_AXIS.margin}>
+          <CartesianGrid {...CHART_AXIS.grid} />
           <XAxis
             dataKey="xIndex"
             type="number"
             domain={['dataMin', 'dataMax']}
             ticks={dateTicks}
             tickFormatter={(value) => formatDateTick(value, chartData)}
-            tick={{ fill: '#64748b', fontSize: 10 }}
-            tickMargin={10}
+            tick={CHART_AXIS.tick}
+            tickMargin={CHART_AXIS.tickMargin}
             axisLine={false}
             tickLine={false}
           />
           <YAxis
-            tickFormatter={isPercentMode ? formatPercentValue : formatAxisValue}
-            tick={{ fill: '#64748b', fontSize: 10 }}
+            tickFormatter={isPercentMode ? formatPercentValue : formatCompactAxisValue}
+            tick={CHART_AXIS.tick}
             axisLine={false}
             tickLine={false}
-            width={44}
+            width={CHART_AXIS.yAxisWidth}
             domain={[0, maxDomain]}
-            ticks={[0, ...horizontalGridValues]}
+            ticks={axisTicks}
           />
-          <Tooltip content={<CustomTooltip isPercentMode={isPercentMode} />} cursor={{ stroke: '#334155', strokeWidth: 1, strokeDasharray: '4 4' }} />
+          <Tooltip content={<CustomTooltip isPercentMode={isPercentMode} />} cursor={CHART_AXIS.cursor} />
           <Legend
-            wrapperStyle={{ paddingTop: 16, fontSize: 12 }}
-            iconType="circle"
-            onClick={handleLegendClick}
-            formatter={(value) => (
-              <span
-                className={selectedCategory === value ? 'font-semibold text-slate-100' : 'text-slate-300'}
-                style={{ cursor: 'pointer' }}
-              >
-                {value}
-              </span>
+            wrapperStyle={CHART_AXIS.legendWrapper}
+            content={(
+              <CustomLegend
+                items={legendItems}
+                selectedCategory={selectedCategory}
+                onSelect={handleLegendClick}
+              />
             )}
           />
-          {sortedCategories.map((category) => (
-            <Area
-              key={category}
-              type="monotone"
-              dataKey={category}
-              name={category}
-              stackId="asset-category-history"
-              stroke={COLORS[categories.indexOf(category) % COLORS.length]}
-              fill={COLORS[categories.indexOf(category) % COLORS.length]}
-              fillOpacity={selectedCategory ? (selectedCategory === category ? 0.82 : 0.14) : 0.28}
-              strokeOpacity={selectedCategory ? (selectedCategory === category ? 1 : 0.38) : 1}
-              strokeWidth={selectedCategory === category ? 2.6 : 1.5}
-              activeDot={{ r: 3, stroke: '#0f172a', strokeWidth: 1.5 }}
-            />
-          ))}
+          {sortedCategories.map((category) => {
+            const categoryColor = getCategoryColor(category, categories);
+
+            return (
+              <Area
+                key={category}
+                type="monotone"
+                dataKey={category}
+                name={category}
+                stackId="asset-category-history"
+                stroke={categoryColor}
+                fill={categoryColor}
+                fillOpacity={selectedCategory ? (selectedCategory === category ? 0.82 : 0.14) : 0.28}
+                strokeOpacity={selectedCategory ? (selectedCategory === category ? 1 : 0.38) : 1}
+                strokeWidth={selectedCategory === category ? 2.6 : 1.5}
+                activeDot={{ r: 3, stroke: '#0f172a', strokeWidth: 1.5 }}
+              />
+            );
+          })}
           {dateTicks.map((tick) => (
             <ReferenceLine
               key={`vertical-grid-${tick}`}
               x={tick}
-              stroke="#cbd5e1"
-              strokeDasharray="2 4"
-              strokeOpacity={0.18}
+              {...CHART_AXIS.referenceLine}
               ifOverflow="extendDomain"
             />
           ))}
@@ -285,9 +250,7 @@ const AssetCategoryHistoryChart = () => {
             <ReferenceLine
               key={`horizontal-grid-${value}`}
               y={value}
-              stroke="#cbd5e1"
-              strokeDasharray="2 4"
-              strokeOpacity={0.18}
+              {...CHART_AXIS.referenceLine}
               ifOverflow="extendDomain"
             />
           ))}

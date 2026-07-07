@@ -2,7 +2,12 @@ import useDisplayedAssets from '../../hooks/useDisplayedAssets';
 import { formatCurrency } from '../../utils/number';
 
 const PortfolioTable = () => {
-  const { assets: displayedAssets, isUsingLiveAssets } = useDisplayedAssets();
+  const {
+    assets: displayedAssets,
+    isUsingDummyAssets,
+    isUsingLiveAssets,
+    sourceLabel,
+  } = useDisplayedAssets();
   const totalValue = displayedAssets.reduce((sum, asset) => sum + asset.value, 0);
 
   if (displayedAssets.length === 0) {
@@ -13,8 +18,8 @@ const PortfolioTable = () => {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
           </svg>
         </div>
-        <p className="text-sm font-medium text-slate-300">Brak zdefiniowanych aktywów</p>
-        <p className="text-xs text-slate-500 mt-1">Przejdź do zakładki "Dane wejściowe", aby dodać swoje pierwsze aktywo.</p>
+        <p className="text-sm font-medium text-slate-300">Brak zdefiniowanych aktywow</p>
+        <p className="text-xs text-slate-500 mt-1">Dodaj dane w zakladce Dane Live albo zapisz fallback w Ustawieniach jako Dane dummy.</p>
       </div>
     );
   }
@@ -23,15 +28,20 @@ const PortfolioTable = () => {
     <div className="bg-slate-900 border border-slate-800/80 rounded-2xl shadow-xl overflow-hidden mb-8 transition-all hover:border-slate-800">
       <div className="px-6 py-5 border-b border-slate-800/80 flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center bg-slate-900/50">
         <div>
-          <h2 className="text-lg font-bold text-white">Podsumowanie Aktywów</h2>
+          <h2 className="text-lg font-bold text-white">Podsumowanie Aktywow</h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            {isUsingLiveAssets ? 'Dane pobrane z zakładki Dane Live' : 'Zestawienie Twojej alokacji kapitału'}
+            {sourceLabel ? `Dane pobrane z: ${sourceLabel}` : 'Zestawienie Twojej alokacji kapitalu'}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          {isUsingLiveAssets && (
-            <span className="text-xs font-semibold bg-emerald-500/10 text-emerald-400 px-3 py-1.5 rounded-lg border border-emerald-500/20">
-              Źródło: Dane Live
+          {(isUsingLiveAssets || isUsingDummyAssets) && (
+            <span className={`text-xs font-semibold px-3 py-1.5 rounded-lg border ${
+              isUsingLiveAssets
+                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                : 'bg-amber-500/10 text-amber-300 border-amber-500/20'
+            }`}
+            >
+              Zrodlo: {sourceLabel}
             </span>
           )}
           <span className="font-mono font-bold text-sm text-blue-400 bg-blue-500/10 border border-blue-500/20 px-4 py-2 rounded-xl shadow-inner">
@@ -45,7 +55,7 @@ const PortfolioTable = () => {
           <thead>
             <tr className="bg-slate-950/40 text-slate-400 text-xs uppercase tracking-wider">
               <th className="px-6 py-4 font-semibold border-b border-slate-800/50">Kategoria</th>
-              <th className="px-6 py-4 font-semibold border-b border-slate-800/50 text-right">Wartość</th>
+              <th className="px-6 py-4 font-semibold border-b border-slate-800/50 text-right">Wartosc</th>
               <th className="px-6 py-4 font-semibold border-b border-slate-800/50 text-right">Alokacja</th>
             </tr>
           </thead>

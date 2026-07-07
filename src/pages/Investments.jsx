@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
+import useLiveData from '../hooks/useLiveData.js';
+import { notifyLiveDataChanged } from '../utils/liveData.js';
 
 const PORTFOLIO_NAMES = ['Portfel Makler', 'Portfel IKZE'];
 const MAX_COMPACT_COLUMNS = 10;
@@ -428,7 +430,7 @@ const InvestmentTable = ({ portfolioName, rows, selectedHeaders, selectedTotalHe
                     </svg>
                 </div>
                 <p className="text-sm font-medium text-slate-300">{portfolioName}</p>
-                <p className="text-xs text-slate-500 mt-1">Brak danych dla tego zakresu w cache Dane Live.</p>
+                <p className="text-xs text-slate-500 mt-1">Brak danych dla tego zakresu w Dane Live i Dane dummy.</p>
             </div>
         );
     }
@@ -438,7 +440,7 @@ const InvestmentTable = ({ portfolioName, rows, selectedHeaders, selectedTotalHe
             <div className="px-6 py-5 border-b border-slate-800/80 bg-slate-900/50 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                 <div>
                     <h2 className="text-lg font-bold text-white">{portfolioName}</h2>
-                    <p className="text-xs text-slate-500 mt-0.5">Widok skrocony na podstawie danych z zakladki Dane Live</p>
+                    <p className="text-xs text-slate-500 mt-0.5">Widok skrocony na podstawie Dane Live z fallbackiem Dane dummy</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
                     <span className="text-xs font-semibold bg-slate-800 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-700/50">
@@ -506,14 +508,7 @@ const InvestmentTable = ({ portfolioName, rows, selectedHeaders, selectedTotalHe
 };
 
 const Investments = () => {
-    const [liveData, setLiveData] = useState(() => {
-        try {
-            const saved = localStorage.getItem('fetchedLiveData');
-            return saved ? JSON.parse(saved) : null;
-        } catch {
-            return null;
-        }
-    });
+    const liveData = useLiveData();
     const [activeModal, setActiveModal] = useState(null);
     const [selectedColumnsByPortfolio, setSelectedColumnsByPortfolio] = useState(() => {
         try {
@@ -546,15 +541,6 @@ const Investments = () => {
     })), [liveData]);
 
     const foundCount = portfolios.filter((portfolio) => portfolio.rows.length > 0).length;
-
-    const refreshLiveData = () => {
-        try {
-            const saved = localStorage.getItem('fetchedLiveData');
-            setLiveData(saved ? JSON.parse(saved) : null);
-        } catch {
-            setLiveData(null);
-        }
-    };
 
     const toggleCompactColumn = (portfolioName, header) => {
         setSelectedColumnsByPortfolio((currentSelections) => {
@@ -599,14 +585,14 @@ const Investments = () => {
                     <h1 className="text-3xl font-bold bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
                         Inwestycje
                     </h1>
-                    <p className="text-slate-400 text-sm mt-1">Pozycje z zakresow Portfel Makler oraz Portfel IKZE pobranych w Dane Live.</p>
+                    <p className="text-slate-400 text-sm mt-1">Pozycje z zakresow Portfel Makler oraz Portfel IKZE pobranych z Dane Live lub Dane dummy.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                     <span className="text-xs font-semibold bg-emerald-500/10 text-emerald-400 px-3 py-1.5 rounded-lg border border-emerald-500/20">
                         {foundCount}/2 portfele znalezione
                     </span>
                     <button
-                        onClick={refreshLiveData}
+                        onClick={notifyLiveDataChanged}
                         className="inline-flex items-center justify-center gap-2 px-4 py-2 font-medium text-xs rounded-lg transition-colors bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700/50"
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -622,7 +608,7 @@ const Investments = () => {
                     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
-                    Brak zapisanych danych. Najpierw pobierz wszystkie zakresy w zakladce Dane Live.
+                    Brak zapisanych danych. Najpierw pobierz zakresy w Dane Live albo zapisz fallback w Ustawieniach jako Dane dummy.
                 </div>
             )}
 

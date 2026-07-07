@@ -1,13 +1,112 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { clearPortfolioData } from '../features/portfolioSlice';
-import { FETCHED_LIVE_DATA_KEY, notifyLiveDataChanged } from '../utils/liveData';
+import {
+  DUMMY_LIVE_DATA_KEY,
+  FETCHED_LIVE_DATA_KEY,
+  LIVE_ASSETS_KEY,
+  LIVE_PORTFOLIO_HISTORY_KEY,
+  notifyLiveDataChanged,
+  readStoredDummyData,
+} from '../utils/liveData';
+import { normalizeText } from '../utils/number';
 
 const DEFAULT_COMMISSIONS = {
   gpwRate: '0.39',
   gpwMin: '5',
   foreignRate: '0.29',
   foreignMin: '14',
+};
+
+const formatJson = (data) => JSON.stringify(data ?? {}, null, 2);
+
+const readStorageJson = (key, fallback) => {
+  try {
+    const saved = localStorage.getItem(key);
+    return saved ? JSON.parse(saved) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const getValueByAliases = (row, aliases) => {
+  if (!row || typeof row !== 'object') return '';
+
+  const normalizedAliases = aliases.map(normalizeText);
+  const key = Object.keys(row).find((candidate) => (
+    normalizedAliases.includes(normalizeText(candidate))
+  ));
+
+  return key ? row[key] : '';
+};
+
+const buildDummyDataFromLegacyCache = () => {
+  const legacyAssets = readStorageJson('portfolioAssets', []);
+  const legacyHistory = readStorageJson('portfolioHistory', []);
+  const legacyStockPortfolios = readStorageJson('stockPortfolios', []);
+  const dummyData = {};
+
+  if (Array.isArray(legacyAssets) && legacyAssets.length > 0) {
+    dummyData[LIVE_ASSETS_KEY] = legacyAssets
+      .map((asset) => ({
+        Kategoria: asset?.label ?? '',
+        ['Warto\u015b\u0107 PLN']: asset?.value ?? '',
+      }))
+      .filter((row) => row.Kategoria);
+  }
+
+  if (Array.isArray(legacyHistory) && legacyHistory.length > 0) {
+    dummyData[LIVE_PORTFOLIO_HISTORY_KEY] = legacyHistory
+      .map((row) => ({
+        Data: getValueByAliases(row, ['Data', 'date']),
+        ['Warto\u015b\u0107']: getValueByAliases(row, ['Warto\u015b\u0107', 'Wartosc', 'wartosc']),
+        ['Wp\u0142acone \u0142\u0105cz.']: getValueByAliases(row, ['Wp\u0142acone \u0142\u0105cz.', 'Wplacone lacz.', 'wplacone']),
+        ['R\u00f3\u017cnica']: getValueByAliases(row, ['R\u00f3\u017cnica', 'Roznica', 'roznica']),
+      }))
+      .filter((row) => row.Data);
+  }
+
+  if (Array.isArray(legacyStockPortfolios) && legacyStockPortfolios.length > 0) {
+    legacyStockPortfolios.forEach((portfolio) => {
+      if (!portfolio?.name || !Array.isArray(portfolio.assets)) return;
+      dummyData[portfolio.name] = portfolio.assets;
+    });
+  }
+
+  return dummyData;
+};
+
+const validateDummyData = (data) => {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return 'JSON musi byc obiektem: { "Nazwa zakresu": [wiersze] }.';
+  }
+
+  const invalidEntry = Object.entries(data).find(([, rows]) => !Array.isArray(rows));
+  if (invalidEntry) {
+    return `Zakres "${invalidEntry[0]}" musi byc tablica wierszy.`;
+  }
+
+  const invalidRow = Object.entries(data).find(([, rows]) => (
+    rows.some((row) => !row || typeof row !== 'object' || Array.isArray(row))
+  ));
+  if (invalidRow) {
+    return `Zakres "${invalidRow[0]}" zawiera wiersz, ktory nie jest obiektem.`;
+  }
+
+  return '';
+};
+
+const getInitialDummyDataText = () => {
+  const storedDummyData = readStoredDummyData();
+  if (storedDummyData) return formatJson(storedDummyData);
+  if (localStorage.getItem(DUMMY_LIVE_DATA_KEY) !== null) return formatJson({});
+
+  const migratedDummyData = buildDummyDataFromLegacyCache();
+  if (Object.keys(migratedDummyData).length === 0) return formatJson({});
+
+  localStorage.setItem(DUMMY_LIVE_DATA_KEY, JSON.stringify(migratedDummyData));
+  window.queueMicrotask(notifyLiveDataChanged);
+  return formatJson(migratedDummyData);
 };
 
 const Settings = () => {
@@ -22,6 +121,18 @@ const Settings = () => {
       return DEFAULT_COMMISSIONS;
     }
   });
+  const [dummyDataText, setDummyDataText] = useState(getInitialDummyDataText);
+  const [dummyDataError, setDummyDataError] = useState('');
+  const dummyRangeCount = useMemo(() => {
+    try {
+      const parsedData = JSON.parse(dummyDataText);
+      return parsedData && typeof parsedData === 'object' && !Array.isArray(parsedData)
+        ? Object.keys(parsedData).length
+        : 0;
+    } catch {
+      return 0;
+    }
+  }, [dummyDataText]);
 
   useEffect(() => {
     localStorage.setItem('portfolioCommissions', JSON.stringify(commissions));
@@ -37,6 +148,39 @@ const Settings = () => {
     window.setTimeout(() => setStatusMessage({ text: '', type: '' }), 4000);
   };
 
+  const handleDummyDataChange = (event) => {
+    setDummyDataText(event.target.value);
+    setDummyDataError('');
+  };
+
+  const handleSaveDummyData = () => {
+    try {
+      const parsedData = JSON.parse(dummyDataText || '{}');
+      const validationError = validateDummyData(parsedData);
+
+      if (validationError) {
+        setDummyDataError(validationError);
+        return;
+      }
+
+      localStorage.setItem(DUMMY_LIVE_DATA_KEY, JSON.stringify(parsedData));
+      setDummyDataText(formatJson(parsedData));
+      setDummyDataError('');
+      notifyLiveDataChanged();
+      showStatus('Dane dummy zostaly zapisane.');
+    } catch (error) {
+      setDummyDataError(`Niepoprawny JSON: ${error.message}`);
+    }
+  };
+
+  const handleClearDummyData = () => {
+    localStorage.removeItem(DUMMY_LIVE_DATA_KEY);
+    setDummyDataText(formatJson({}));
+    setDummyDataError('');
+    notifyLiveDataChanged();
+    showStatus('Dane dummy zostaly wyczyszczone.', 'error');
+  };
+
   const handleClearData = () => {
     if (!window.confirm('Czy na pewno chcesz usunąć zaimportowane dane portfela, historię i cache live? Tej operacji nie da się cofnąć.')) {
       return;
@@ -44,6 +188,7 @@ const Settings = () => {
 
     dispatch(clearPortfolioData());
     localStorage.removeItem(FETCHED_LIVE_DATA_KEY);
+    localStorage.removeItem(DUMMY_LIVE_DATA_KEY);
     localStorage.removeItem('investmentCompactColumns');
     localStorage.removeItem('investmentTotalColumns');
     notifyLiveDataChanged();
@@ -59,6 +204,7 @@ const Settings = () => {
         portfolioInputText: localStorage.getItem('portfolioInputText') || '',
         portfolioHistoryText: localStorage.getItem('portfolioHistoryText') || '',
         fetchedLiveData: localStorage.getItem(FETCHED_LIVE_DATA_KEY) || '',
+        dummyLiveData: localStorage.getItem(DUMMY_LIVE_DATA_KEY) || '',
       },
     };
     const dataStr = `data:text/json;charset=utf-8,${encodeURIComponent(JSON.stringify(backupData, null, 2))}`;
@@ -169,6 +315,55 @@ const Settings = () => {
               </button>
             </div>
           </form>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800/80 rounded-2xl shadow-xl overflow-hidden">
+          <div className="px-6 py-5 border-b border-slate-800/80 bg-slate-900/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-bold text-white">Dane dummy</h3>
+              <p className="text-xs text-slate-500 mt-1">Fallback dla Portfela i Inwestycji, uzywany tylko gdy brakuje zakresu w Dane Live.</p>
+            </div>
+            <span className="text-xs text-slate-400 bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-700/50">
+              Zakresy: {dummyRangeCount}
+            </span>
+          </div>
+          <div className="p-6 space-y-4">
+            <textarea
+              value={dummyDataText}
+              onChange={handleDummyDataChange}
+              spellCheck={false}
+              className="w-full min-h-[320px] p-4 bg-slate-950/70 border border-slate-700/50 rounded-lg font-mono text-xs text-slate-300 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50 resize-y"
+              placeholder='{"Podsumowanie aktywow": [{"Kategoria": "Gotowka", "Wartosc PLN": "1000"}]}'
+            />
+
+            {dummyDataError && (
+              <div className="p-3 rounded-lg border border-rose-500/20 bg-rose-500/10 text-sm text-rose-300">
+                {dummyDataError}
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <p className="text-xs text-slate-500 max-w-xl">
+                Format musi byc taki sam jak w Dane Live: obiekt, w ktorym klucze sa nazwami zakresow, a wartosci tablicami wierszy.
+              </p>
+              <div className="flex flex-wrap gap-3 justify-end">
+                <button
+                  type="button"
+                  onClick={handleClearDummyData}
+                  className="px-4 py-2 font-medium text-xs rounded-lg transition-colors bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700/50"
+                >
+                  Wyczysc
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveDummyData}
+                  className="px-4 py-2 font-medium text-xs rounded-lg transition-colors bg-blue-600 text-white hover:bg-blue-500"
+                >
+                  Zapisz dane dummy
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div className="bg-slate-900 border border-slate-800/80 rounded-2xl shadow-xl overflow-hidden">

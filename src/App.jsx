@@ -1,7 +1,6 @@
-import { BrowserRouter as Router, Routes, Route, NavLink } from 'react-router-dom';
+import { BrowserRouter as Router, Navigate, NavLink, Route, Routes } from 'react-router-dom';
 import Settings from './pages/Settings';
 import Portfolio from './pages/Portfolio';
-import DataInput from './pages/DataInput';
 import LiveData from './pages/LiveData';
 import Investments from './pages/Investments';
 
@@ -33,7 +32,7 @@ const Sidebar = () => {
         </div>
 
         <nav className="space-y-1">
-          <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Menu główne</p>
+          <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Menu glowne</p>
           <NavLink to="/" className={linkStyle}>
             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 3.055A9.003 9.003 0 1020.945 13H11V3.055z" />
@@ -41,23 +40,17 @@ const Sidebar = () => {
             </svg>
             Portfel
           </NavLink>
-          <NavLink to="/data" className={linkStyle}>
+          <NavLink to="/investments" className={linkStyle}>
             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m-9 1V4a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
             </svg>
-            Dane wejściowe
+            Inwestycje
           </NavLink>
           <NavLink to="/live" className={linkStyle}>
             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
             </svg>
             Dane Live
-          </NavLink>
-          <NavLink to="/investments" className={linkStyle}>
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-            </svg>
-            Inwestycje
           </NavLink>
           <NavLink to="/settings" className={linkStyle}>
             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -88,10 +81,10 @@ function App() {
         <main className="flex-1 bg-gradient-to-b from-slate-900 via-slate-950 to-slate-950 overflow-y-auto">
           <Routes>
             <Route path="/" element={<Portfolio />} />
-            <Route path="/data" element={<DataInput />} />
-            <Route path="/live" element={<LiveData />} />
             <Route path="/investments" element={<Investments />} />
+            <Route path="/live" element={<LiveData />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/data" element={<Navigate to="/settings" replace />} />
           </Routes>
         </main>
       </div>
