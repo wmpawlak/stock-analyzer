@@ -54,11 +54,56 @@ const getStackedScale = (data, categories) => getRoundedAxisTicks(
   data.map((point) => categories.reduce((sum, category) => sum + (point[category] || 0), 0)),
 );
 
+const getPercentStackedScale = (data, categories) => {
+  const maxVisibleStack = Math.max(
+    ...data.map((point) => categories.reduce((sum, category) => sum + (point[category] || 0), 0)),
+    0,
+  );
+  const maxDomain = Math.min(100, Math.max(10, Math.ceil(maxVisibleStack / 10) * 10));
+  const step = maxDomain <= 20 ? 5 : 20;
+  const ticks = [];
+
+  for (let value = 0; value <= maxDomain; value += step) {
+    ticks.push(value);
+  }
+
+  return { maxDomain, ticks };
+};
+
 const getCategoryColor = (category, categories) => (
   CHART_COLORS.categoryPalette[categories.indexOf(category) % CHART_COLORS.categoryPalette.length]
 );
 
-const CustomTooltip = ({ active, payload, label, isPercentMode }) => {
+const EyeIcon = ({ isVisible }) => (
+  <svg
+    aria-hidden="true"
+    className="h-3.5 w-3.5"
+    fill="none"
+    viewBox="0 0 24 24"
+    stroke="currentColor"
+    strokeWidth="1.8"
+  >
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      d="M2.25 12s3.5-6.25 9.75-6.25S21.75 12 21.75 12 18.25 18.25 12 18.25 2.25 12 2.25 12Z"
+    />
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      d="M9.75 12a2.25 2.25 0 1 0 4.5 0 2.25 2.25 0 0 0-4.5 0Z"
+    />
+    {!isVisible && (
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M4.5 19.5 19.5 4.5"
+      />
+    )}
+  </svg>
+);
+
+const CustomTooltip = ({ active, payload, label, isPercentMode, hasHiddenCategories }) => {
   if (!active || !payload?.length) return null;
 
   const visiblePayload = payload
@@ -79,7 +124,7 @@ const CustomTooltip = ({ active, payload, label, isPercentMode }) => {
         value: entry.value,
       }))}
       total={{
-        label: 'Suma',
+        label: hasHiddenCategories ? 'Suma widoczna' : 'Suma',
         value: total,
         formatter: isPercentMode ? formatPercentValue : formatCurrencyValue,
       }}
@@ -88,33 +133,75 @@ const CustomTooltip = ({ active, payload, label, isPercentMode }) => {
   );
 };
 
-const CustomLegend = ({ items, selectedCategory, onSelect }) => (
+const CustomLegend = ({
+  items,
+  selectedCategory,
+  hiddenCategories,
+  visibleCount,
+  onSelect,
+  onToggleVisibility,
+  onShowAll,
+}) => (
   <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 pt-4 text-xs">
     {items.map((item) => {
       const isSelected = selectedCategory === item.value;
+      const isHidden = hiddenCategories.has(item.value);
+      const isLastVisible = visibleCount === 1 && !isHidden;
 
       return (
-        <button
-          key={item.value}
-          type="button"
-          onClick={() => onSelect(item.value)}
-          className={`inline-flex items-center gap-1.5 transition-colors ${
-            isSelected ? 'font-semibold text-slate-100' : 'text-slate-300 hover:text-slate-100'
-          }`}
-        >
+        <div key={item.value} className="inline-flex items-center gap-1.5">
           <span
             className="h-3.5 w-3.5 rounded-full"
-            style={{ backgroundColor: item.color }}
+            style={{ backgroundColor: item.color, opacity: isHidden ? 0.35 : 1 }}
           />
-          <span>{item.value}</span>
-        </button>
+          <button
+            type="button"
+            onClick={() => onSelect(item.value)}
+            disabled={isHidden}
+            className={`transition-colors ${
+              isHidden
+                ? 'cursor-not-allowed text-slate-600 line-through'
+                : isSelected
+                  ? 'font-semibold text-slate-100'
+                  : 'text-slate-300 hover:text-slate-100'
+            }`}
+          >
+            {item.value}
+          </button>
+          <button
+            type="button"
+            onClick={() => onToggleVisibility(item.value)}
+            disabled={isLastVisible}
+            title={isHidden ? `Pokaż ${item.value}` : `Ukryj ${item.value}`}
+            aria-label={isHidden ? `Pokaż ${item.value}` : `Ukryj ${item.value}`}
+            className={`inline-flex h-6 w-6 items-center justify-center rounded-md transition-colors ${
+              isLastVisible
+                ? 'cursor-not-allowed text-slate-700'
+                : isHidden
+                  ? 'text-slate-500 hover:bg-slate-800 hover:text-slate-200'
+                  : 'text-slate-400 hover:bg-slate-800 hover:text-slate-100'
+            }`}
+          >
+            <EyeIcon isVisible={!isHidden} />
+          </button>
+        </div>
       );
     })}
+    {hiddenCategories.size > 0 && (
+      <button
+        type="button"
+        onClick={onShowAll}
+        className="ml-1 rounded-md border border-slate-700 px-2 py-1 text-slate-300 transition-colors hover:border-slate-500 hover:text-slate-100"
+      >
+        Pokaż wszystkie
+      </button>
+    )}
   </div>
 );
 
 const AssetCategoryHistoryChart = () => {
   const [selectedCategory, setSelectedCategory] = useState(null);
+  const [hiddenCategories, setHiddenCategories] = useState(() => new Set());
   const [isPercentMode, setIsPercentMode] = useState(false);
   const liveData = useLiveData();
   const { data, categories } = useMemo(
@@ -134,24 +221,54 @@ const AssetCategoryHistoryChart = () => {
     () => getPercentData(chartData, sortedCategories),
     [chartData, sortedCategories],
   );
+  const visibleCategories = useMemo(
+    () => sortedCategories.filter((category) => !hiddenCategories.has(category)),
+    [sortedCategories, hiddenCategories],
+  );
   const visibleData = isPercentMode ? percentData : chartData;
+  const hasHiddenCategories = hiddenCategories.size > 0;
   const { maxDomain, ticks: axisTicks } = useMemo(
     () => {
-      if (isPercentMode) return { maxDomain: 100, ticks: PERCENT_AXIS_TICKS };
+      if (isPercentMode && visibleCategories.length === sortedCategories.length) {
+        return { maxDomain: 100, ticks: PERCENT_AXIS_TICKS };
+      }
 
-      const axis = getStackedScale(visibleData, sortedCategories);
+      if (isPercentMode) return getPercentStackedScale(visibleData, visibleCategories);
+
+      const axis = getStackedScale(visibleData, visibleCategories);
       return { maxDomain: axis.max, ticks: axis.ticks };
     },
-    [isPercentMode, visibleData, sortedCategories],
+    [isPercentMode, visibleData, sortedCategories, visibleCategories],
   );
   const horizontalGridValues = axisTicks.filter((tick) => tick !== 0);
   const dateTicks = useMemo(() => getAdaptiveDateTicks(chartData), [chartData]);
   const handleLegendClick = (category) => {
-    if (!category) return;
+    if (!category || hiddenCategories.has(category)) return;
 
     setSelectedCategory((currentCategory) => (
       currentCategory === category ? null : category
     ));
+  };
+  const handleToggleVisibility = (category) => {
+    if (!category) return;
+
+    setHiddenCategories((currentCategories) => {
+      const nextCategories = new Set(currentCategories);
+
+      if (nextCategories.has(category)) {
+        nextCategories.delete(category);
+      } else if (sortedCategories.length - nextCategories.size > 1) {
+        nextCategories.add(category);
+      }
+
+      return nextCategories;
+    });
+    setSelectedCategory((currentCategory) => (
+      currentCategory === category ? null : currentCategory
+    ));
+  };
+  const handleShowAll = () => {
+    setHiddenCategories(new Set());
   };
 
   if (chartData.length === 0 || categories.length === 0) {
@@ -208,18 +325,30 @@ const AssetCategoryHistoryChart = () => {
             domain={[0, maxDomain]}
             ticks={axisTicks}
           />
-          <Tooltip content={<CustomTooltip isPercentMode={isPercentMode} />} cursor={CHART_AXIS.cursor} />
+          <Tooltip
+            content={(
+              <CustomTooltip
+                isPercentMode={isPercentMode}
+                hasHiddenCategories={hasHiddenCategories}
+              />
+            )}
+            cursor={CHART_AXIS.cursor}
+          />
           <Legend
             wrapperStyle={CHART_AXIS.legendWrapper}
             content={(
               <CustomLegend
                 items={legendItems}
                 selectedCategory={selectedCategory}
+                hiddenCategories={hiddenCategories}
+                visibleCount={visibleCategories.length}
                 onSelect={handleLegendClick}
+                onToggleVisibility={handleToggleVisibility}
+                onShowAll={handleShowAll}
               />
             )}
           />
-          {sortedCategories.map((category) => {
+          {visibleCategories.map((category) => {
             const categoryColor = getCategoryColor(category, categories);
 
             return (
