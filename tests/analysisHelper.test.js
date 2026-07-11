@@ -227,7 +227,7 @@ test('Perplexity adapter sends structured discovery and file-analysis requests w
   const analysis = await analyzeDocumentsWithPerplexity({
     apiKey: 'test-key',
     profile,
-    documents: [{ id: 'doc_1', filename: 'q1.pdf', title: 'Raport Q1', type: 'raport kwartalny', period: 'Q1 2026', sourceUrl: 'https://issuer.example/q1.pdf' }],
+    documents: [{ id: 'doc_1', filename: 'q1.pdf', title: 'Raport Q1', type: 'raport kwartalny', period: 'Q1 2026', sourceUrl: 'https://issuer.example/q1.pdf', mimeType: 'application/pdf' }],
     documentBuffers: [Buffer.from('%PDF-test')],
     fetchImpl,
   });
@@ -236,4 +236,6 @@ test('Perplexity adapter sends structured discovery and file-analysis requests w
   assert.equal(analysis.content.citations[0].url, 'https://issuer.example/q1.pdf');
   assert.equal(requests[1].body.model, 'sonar-pro');
   assert.equal(requests[1].body.messages[1].content[1].type, 'file_url');
+  assert.equal(requests[1].body.messages[1].content[1].file_url.url, Buffer.from('%PDF-test').toString('base64'));
+  assert.match(requests[1].body.messages[1].content[1].file_url.url, /^[A-Za-z0-9+/]+={0,2}$/);
 });

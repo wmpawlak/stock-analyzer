@@ -5,6 +5,33 @@ const FILE_ATTACHMENT_EXTENSIONS = new Set(['pdf', 'doc', 'docx', 'txt', 'rtf'])
 const INLINE_TEXT_EXTENSIONS = new Set(['txt', 'rtf', 'html', 'htm', 'csv']);
 const MAX_INLINE_TEXT_CHARS = 180_000;
 const MAX_FILE_ATTACHMENTS = 30;
+const VALUATION_METRIC_LABELS = [
+  'C/Z',
+  'C/WK',
+  'C/WK Grahama',
+  'C/P',
+  'C/S',
+  'C/ZO',
+  'EV/P',
+  'EV/EBIT',
+  'EV/EBITDA',
+  'ROA',
+  'ROE',
+];
+const FINANCIAL_RESULT_LABELS = [
+  'Przychody ze sprzedaży',
+  'Zysk (strata) ze sprzedaży',
+  'Zysk operacyjny (EBIT)',
+  'Zysk (strata) z działalności gospodarczej',
+  'Zysk netto',
+  'Aktywa ogółem',
+  'Aktywa obrotowe',
+  'Zobowiązania ogółem',
+  'Zobowiązania długoterminowe',
+  'Zobowiązania krótkoterminowe',
+  'Przepływy pieniężne razem',
+  'Dywidenda za dany rok',
+];
 
 const DISCOVERY_SCHEMA = {
   type: 'object',
@@ -258,13 +285,18 @@ export const analyzeDocumentsWithPerplexity = async ({ apiKey, profile, document
     publishedAt: document.publishedAt,
     sourceUrl: document.sourceUrl,
   }));
+  const metricInstructions = `W polu metrics zwracaj w pierwszej kolejności poniższe etykiety, dokładnie w tym brzmieniu, jeśli dane są dostępne:
+- wskaźniki wyceny i rentowności: ${VALUATION_METRIC_LABELS.join(', ')}
+- wyniki finansowe: ${FINANCIAL_RESULT_LABELS.join(', ')}
+
+Dla każdej metryki ustaw: label jako jedną z powyższych etykiet, value jako samą liczbę lub null, unit jako osobną jednostkę (np. "x", "%", "tys. PLN", "mln PLN", "PLN/akcję"), period jako "Q1 2026", "Q2 2026", "2026" itd. Nie doklejaj jednostki do value. Dla danych rachunku wyników i przepływów zwracaj okresy kwartalne, jeśli są w dokumencie. Dla aktywów i zobowiązań traktuj wartość jako stan na koniec okresu.`;
   const prompt = `Przeanalizuj zatwierdzone dokumenty dla aktywa poniżej. Odpowiedź musi być po polsku. Traktuj dokumenty jako źródło główne; wyraźnie oddziel fakty od interpretacji. Porównuj rok do roku, gdy dokument zawiera porównywalne dane. Jeśli metryki nie da się wiarygodnie ustalić, nie dodawaj jej. Nie podawaj rekomendacji inwestycyjnej.\n\nAktywo: ${JSON.stringify({ assetId: profile.assetId, type: profile.type, name: profile.name, canonicalId: profile.canonicalId })}\n\nDokumenty: ${JSON.stringify(metadata)}`;
   const messages = [
     {
       role: 'system',
       content: 'Jesteś ostrożnym analitykiem raportów spółek i ETF-ów. Każda liczba powinna mieć okres i źródło. Zwróć wyłącznie strukturę JSON zgodną ze schematem.',
     },
-    { role: 'user', content: [{ type: 'text', text: prompt }, ...attachments] },
+    { role: 'user', content: [{ type: 'text', text: `${prompt}\n\n${metricInstructions}` }, ...attachments] },
   ];
   const result = await requestCompletion({ apiKey, model: 'sonar-pro', messages, schema: ANALYSIS_SCHEMA, fetchImpl });
   const parsed = safeJson(result.content, {});

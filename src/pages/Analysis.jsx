@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import useLiveData from '../hooks/useLiveData.js';
 import { getPositionMetrics } from '../utils/investmentDetails.js';
+import { normalizeText, parseNumericValue } from '../utils/number.js';
 import {
   ANALYSIS_ASSET_IDS,
   getAnalysisRoute,
@@ -114,6 +115,18 @@ const EmptyState = ({ children }) => (
   </div>
 );
 
+const LoadingCallout = ({ message }) => (
+  <div className="rounded-xl border border-blue-500/25 bg-blue-500/10 px-4 py-3 text-sm text-blue-100 shadow-lg shadow-blue-950/20">
+    <div className="flex items-center gap-3">
+      <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-blue-200/30 border-t-blue-200" aria-hidden="true" />
+      <div>
+        <p className="font-semibold">{message}</p>
+        <p className="mt-0.5 text-xs text-blue-100/70">Możesz zostać na tej stronie, widok odświeży się automatycznie po zakończeniu operacji.</p>
+      </div>
+    </div>
+  </div>
+);
+
 const ActionButton = ({ children, className = '', disabled = false, ...props }) => (
   <button
     type="button"
@@ -191,7 +204,7 @@ const downloadBackupPayload = (payload) => {
   URL.revokeObjectURL(objectUrl);
 };
 
-const BudgetPanel = ({ budget, helperOnline, onUpdate, onExport, onImport, busy }) => {
+const BudgetPanel = ({ budget, helperOnline, onUpdate, onExport, onImport, busy, compact = false }) => {
   const importInputRef = useRef(null);
   const [limit, setLimit] = useState(() => String(budget?.monthlyLimitUsd ?? budget?.limitUsd ?? 10));
 
@@ -200,13 +213,13 @@ const BudgetPanel = ({ budget, helperOnline, onUpdate, onExport, onImport, busy 
   const remaining = budget?.remainingUsd ?? Math.max(0, Number(configuredLimit) - Number(spent || 0));
 
   return (
-    <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
+    <section className={`rounded-2xl border border-slate-800/80 bg-slate-900 shadow-xl ${compact ? 'p-4' : 'p-5'}`}>
       <SectionHeading
         title="Lokalny budżet i backup"
-        description="Limit jest kontrolą po stronie aplikacji. Rozliczenia dostawcy API pozostają źródłem ostatecznym."
+        description={compact ? 'Lokalny limit i kopia danych analizy.' : 'Limit jest kontrolą po stronie aplikacji. Rozliczenia dostawcy API pozostają źródłem ostatecznym.'}
       />
-      <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-        <div className="grid grid-cols-3 gap-3">
+      <div className={`grid gap-4 ${compact ? '' : 'lg:grid-cols-[1.2fr_1fr]'}`}>
+        <div className={`grid gap-3 ${compact ? 'grid-cols-1' : 'grid-cols-3'}`}>
           <div className="rounded-xl border border-slate-800/70 bg-slate-950/60 p-3">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Wykorzystano</p>
             <p className="mt-1 font-mono text-sm font-semibold text-slate-200">{formatUsd(spent)}</p>
@@ -232,14 +245,15 @@ const BudgetPanel = ({ budget, helperOnline, onUpdate, onExport, onImport, busy 
             </div>
           </label>
         </div>
-        <div className="flex flex-wrap items-end justify-start gap-2 lg:justify-end">
+        <div className={`${compact ? 'grid gap-2' : 'flex flex-wrap items-end justify-start gap-2 lg:justify-end'}`}>
           <SecondaryButton
             disabled={!helperOnline || busy}
             onClick={() => onUpdate(Number(limit))}
+            className={compact ? 'w-full' : ''}
           >
             Zapisz limit
           </SecondaryButton>
-          <SecondaryButton disabled={!helperOnline || busy} onClick={onExport}>
+          <SecondaryButton disabled={!helperOnline || busy} onClick={onExport} className={compact ? 'w-full' : ''}>
             Eksportuj pełny backup
           </SecondaryButton>
           <input
@@ -256,6 +270,7 @@ const BudgetPanel = ({ budget, helperOnline, onUpdate, onExport, onImport, busy 
           <SecondaryButton
             disabled={!helperOnline || busy}
             onClick={() => importInputRef.current?.click()}
+            className={compact ? 'w-full' : ''}
           >
             Importuj backup
           </SecondaryButton>
@@ -265,50 +280,75 @@ const BudgetPanel = ({ budget, helperOnline, onUpdate, onExport, onImport, busy 
   );
 };
 
-const ProfileCard = ({ profile }) => {
-  const latest = profile.latestAnalysis || profile.analysis || profile.analyses?.[0];
-  const identifier = profile.isin || profile.canonicalId || (profile.ticker && profile.exchange
-    ? `${profile.ticker}:${profile.exchange}`
-    : profile.ticker);
-
-  return (
-    <Link
-      to={getAnalysisRoute(profile.assetId)}
-      className="group flex h-full flex-col rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl transition-all hover:-translate-y-0.5 hover:border-blue-500/35 hover:bg-slate-900/90"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="mb-2 flex flex-wrap items-center gap-2">
-            <Badge>{getAnalysisTypeLabel(profile.type)}</Badge>
-            {profile.watched && <Badge>obserwowane</Badge>}
-            {profile.isPilot && <Badge>pilot</Badge>}
-          </div>
-          <h2 className="truncate text-base font-bold text-white group-hover:text-blue-200">{profile.name}</h2>
-          <p className="mt-1 truncate font-mono text-xs text-slate-500">{identifier || profile.assetId}</p>
-        </div>
-        <span className="text-slate-600 transition-colors group-hover:text-blue-300">→</span>
-      </div>
-      <div className="mt-5 grid grid-cols-2 gap-3 border-t border-slate-800/70 pt-4 text-xs">
-        <div>
-          <p className="text-slate-500">Portfele</p>
-          <p className="mt-1 font-semibold text-slate-300">
-            {profile.portfolios?.length ? profile.portfolios.join(', ') : 'Lista obserwowanych'}
-          </p>
-        </div>
-        <div>
-          <p className="text-slate-500">Źródła</p>
-          <p className="mt-1 font-semibold text-slate-300">{profile.sources?.length || 0}</p>
-        </div>
-      </div>
-      <div className="mt-4 rounded-lg border border-slate-800/70 bg-slate-950/55 px-3 py-2.5 text-xs">
-        <p className="text-slate-500">Ostatnia analiza</p>
-        <p className="mt-1 font-medium text-slate-300">
-          {latest ? `${getStatusLabel(latest.status)} · ${formatDate(latest.approvedAt || latest.createdAt || latest.updatedAt)}` : 'Brak zatwierdzonej analizy'}
-        </p>
-      </div>
-    </Link>
-  );
-};
+const AnalysisProfilesTable = ({ profiles, onOpen }) => (
+  <div className="overflow-hidden rounded-2xl border border-slate-800/80 bg-slate-900 shadow-xl">
+    <div className="overflow-x-auto">
+      <table className="min-w-full divide-y divide-slate-800/80 text-left text-sm">
+        <thead className="bg-slate-950/45 text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <tr>
+            <th className="px-4 py-3">Instrument</th>
+            <th className="px-4 py-3">Typ</th>
+            <th className="px-4 py-3">Portfele</th>
+            <th className="px-4 py-3 text-right">Pozycje</th>
+            <th className="px-4 py-3 text-right">Źródła</th>
+            <th className="px-4 py-3">Ostatnia analiza</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-800/70">
+          {profiles.map((profile) => {
+            const latest = profile.latestAnalysis || profile.analysis || profile.analyses?.[0];
+            const identifier = profile.isin || profile.canonicalId || (profile.ticker && profile.exchange
+              ? `${profile.ticker}:${profile.exchange}`
+              : profile.ticker);
+            return (
+              <tr
+                key={profile.assetId}
+                tabIndex={0}
+                className="cursor-pointer bg-slate-900 transition-colors hover:bg-slate-800/60 focus:bg-slate-800/60 focus:outline-none"
+                onClick={() => onOpen(profile.assetId)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onOpen(profile.assetId);
+                  }
+                }}
+              >
+                <td className="max-w-[24rem] px-4 py-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-semibold text-slate-100">{profile.name}</p>
+                    <p className="mt-1 truncate font-mono text-xs text-slate-500">{identifier || profile.assetId}</p>
+                  </div>
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex flex-wrap gap-1.5">
+                    <Badge>{getAnalysisTypeLabel(profile.type)}</Badge>
+                    {profile.watched && <Badge>obserwowane</Badge>}
+                    {profile.isPilot && <Badge>pilot</Badge>}
+                  </div>
+                </td>
+                <td className="px-4 py-3 text-slate-300">
+                  {profile.portfolios?.length ? profile.portfolios.join(', ') : 'Lista obserwowanych'}
+                </td>
+                <td className="px-4 py-3 text-right font-mono text-slate-300">{profile.positions?.length || 0}</td>
+                <td className="px-4 py-3 text-right font-mono text-slate-300">{profile.sources?.length || 0}</td>
+                <td className="px-4 py-3 text-slate-300">
+                  {latest ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge status={latest.status}>{getStatusLabel(latest.status)}</Badge>
+                      <span className="text-xs text-slate-500">{formatDate(latest.approvedAt || latest.createdAt || latest.updatedAt)}</span>
+                    </div>
+                  ) : (
+                    <span className="text-slate-500">Brak analizy</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  </div>
+);
 
 const WatchlistForm = ({ helperOnline, onCreate, busy }) => {
   const [visible, setVisible] = useState(false);
@@ -368,7 +408,10 @@ const WatchlistForm = ({ helperOnline, onCreate, busy }) => {
   );
 };
 
-const AnalysisList = ({ profiles, helperStatus, helperError, budget, onRefresh, onCreate, onBudgetUpdate, onExport, onImport, busy }) => (
+const AnalysisList = ({ profiles, helperStatus, helperError, budget, onRefresh, onCreate, onBudgetUpdate, onExport, onImport, busy }) => {
+  const navigate = useNavigate();
+
+  return (
   <div className="mx-auto max-w-7xl p-8 animate-fadeIn">
     <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
       <div>
@@ -387,9 +430,15 @@ const AnalysisList = ({ profiles, helperStatus, helperError, budget, onRefresh, 
       </div>
     </div>
 
-    <HelperBanner status={helperStatus} error={helperError} onRetry={onRefresh} />
+      <HelperBanner status={helperStatus} error={helperError} onRetry={onRefresh} />
 
-    <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-3">
+      {helperStatus === 'loading' && (
+        <div className="mb-6">
+          <LoadingCallout message="Synchronizuję profile analityczne, budżet i lokalny stan helpera..." />
+        </div>
+      )}
+
+      <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-3">
       <div className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Profile analityczne</p>
         <p className="mt-2 text-2xl font-bold text-white">{profiles.length}</p>
@@ -405,9 +454,10 @@ const AnalysisList = ({ profiles, helperStatus, helperError, budget, onRefresh, 
     </div>
 
     {profiles.length ? (
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {profiles.map((profile) => <ProfileCard key={profile.assetId} profile={profile} />)}
-      </div>
+      <AnalysisProfilesTable
+        profiles={profiles}
+        onOpen={(nextAssetId) => navigate(getAnalysisRoute(nextAssetId))}
+      />
     ) : (
       <EmptyState>
         Brak aktywów do analizy. Zaimportuj pozycje w Dane Live lub dodaj instrument do listy obserwowanych.
@@ -426,7 +476,8 @@ const AnalysisList = ({ profiles, helperStatus, helperError, budget, onRefresh, 
       />
     </div>
   </div>
-);
+  );
+};
 
 const Metric = ({ label, value, tone = 'default' }) => (
   <div className="rounded-lg border border-slate-800/70 bg-slate-950/60 px-3 py-2.5">
@@ -586,7 +637,7 @@ const CandidateList = ({ candidates, helperOnline, busy, onDiscover, onApprove }
   </section>
 );
 
-const DocumentList = ({ documents, selectedIds, helperOnline, busy, onToggle, onImport, onDelete, getDownloadUrl }) => {
+const DocumentList = ({ documents, selectedIds, helperOnline, busy, onToggle, onImport, onDelete, getDownloadUrl, compact = false }) => {
   const inputRef = useRef(null);
   const [metadata, setMetadata] = useState({ title: '', type: '', period: '' });
 
@@ -603,18 +654,30 @@ const DocumentList = ({ documents, selectedIds, helperOnline, busy, onToggle, on
   };
 
   return (
-    <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
-      <SectionHeading
-        title="Archiwum dokumentów"
-        description="Oryginalny PDF, HTML lub ZIP pozostaje lokalnie. Zaznaczone dokumenty są wysyłane do Perplexity dopiero po kliknięciu „Analizuj”."
-        action={(
-          <SecondaryButton disabled={!helperOnline || busy} onClick={() => inputRef.current?.click()}>
+    <section className={`rounded-2xl border border-slate-800/80 bg-slate-900 shadow-xl ${compact ? 'p-4' : 'p-5'}`}>
+      {compact ? (
+        <div className="mb-4">
+          <h2 className="text-base font-bold text-white">Archiwum dokumentów</h2>
+          <p className="mt-1 text-xs leading-5 text-slate-500">
+            Zaznaczone dokumenty trafią do Perplexity dopiero po kliknięciu „Analizuj”.
+          </p>
+          <SecondaryButton disabled={!helperOnline || busy} onClick={() => inputRef.current?.click()} className="mt-3 w-full">
             Wgraj raport ręcznie
           </SecondaryButton>
-        )}
-      />
+        </div>
+      ) : (
+        <SectionHeading
+          title="Archiwum dokumentów"
+          description="Oryginalny PDF, HTML lub ZIP pozostaje lokalnie. Zaznaczone dokumenty są wysyłane do Perplexity dopiero po kliknięciu „Analizuj”."
+          action={(
+            <SecondaryButton disabled={!helperOnline || busy} onClick={() => inputRef.current?.click()}>
+              Wgraj raport ręcznie
+            </SecondaryButton>
+          )}
+        />
+      )}
       <input ref={inputRef} type="file" accept=".pdf,.html,.htm,.zip,.txt,.doc,.docx" className="hidden" onChange={upload} />
-      <div className="mb-4 grid gap-2 rounded-xl border border-slate-800/70 bg-slate-950/50 p-3 md:grid-cols-3">
+      <div className={`mb-4 grid gap-2 rounded-xl border border-slate-800/70 bg-slate-950/50 p-3 ${compact ? '' : 'md:grid-cols-3'}`}>
         <input
           value={metadata.title}
           onChange={(event) => setMetadata((current) => ({ ...current, title: event.target.value }))}
@@ -641,7 +704,7 @@ const DocumentList = ({ documents, selectedIds, helperOnline, busy, onToggle, on
             const title = document.title || document.name || document.fileName || 'Dokument';
             const isSelected = selectedIds.includes(documentId);
             return (
-              <div key={documentId} className={`flex flex-col gap-3 rounded-xl border p-3 lg:flex-row lg:items-center lg:justify-between ${isSelected ? 'border-blue-500/35 bg-blue-500/5' : 'border-slate-800/70 bg-slate-950/50'}`}>
+              <div key={documentId} className={`flex flex-col gap-3 rounded-xl border p-3 ${compact ? '' : 'lg:flex-row lg:items-center lg:justify-between'} ${isSelected ? 'border-blue-500/35 bg-blue-500/5' : 'border-slate-800/70 bg-slate-950/50'}`}>
                 <label className="flex min-w-0 cursor-pointer items-start gap-3">
                   <input
                     type="checkbox"
@@ -657,18 +720,18 @@ const DocumentList = ({ documents, selectedIds, helperOnline, busy, onToggle, on
                       {document.format && <Badge>{String(document.format).toUpperCase()}</Badge>}
                       <Badge status={document.status}>{getStatusLabel(document.status)}</Badge>
                     </span>
-                    <span className="mt-1 block text-xs text-slate-500">
+                    <span className="mt-1 block break-words text-xs text-slate-500">
                       {[document.period || document.reportingPeriod, document.publishedAt && formatDate(document.publishedAt), (document.sha256 || document.hash) && `hash: ${String(document.sha256 || document.hash).slice(0, 10)}…`, document.analyzable === false && 'archiwum — wybierz rozpakowany plik'].filter(Boolean).join(' · ') || 'Brak metadanych'}
                     </span>
                   </span>
                 </label>
-                <div className="flex shrink-0 flex-wrap gap-2">
+                <div className={`flex shrink-0 flex-wrap gap-2 ${compact ? 'pl-7' : ''}`}>
                   {getItemId(document) && (
                     <a
                       href={getDownloadUrl(getItemId(document))}
                       target="_blank"
                       rel="noreferrer"
-                      className="inline-flex items-center justify-center rounded-lg border border-slate-700/70 bg-slate-800/60 px-3 py-2 text-xs font-semibold text-slate-200 transition-colors hover:bg-slate-800"
+                      className={`inline-flex items-center justify-center rounded-lg border border-slate-700/70 bg-slate-800/60 px-3 py-2 text-xs font-semibold text-slate-200 transition-colors hover:bg-slate-800 ${compact ? 'flex-1' : ''}`}
                     >
                       Otwórz
                     </a>
@@ -676,7 +739,7 @@ const DocumentList = ({ documents, selectedIds, helperOnline, busy, onToggle, on
                   {getItemId(document) && (
                     <ActionButton
                       disabled={!helperOnline || busy}
-                      className="text-slate-500 hover:bg-rose-500/10 hover:text-rose-300"
+                      className={`${compact ? 'flex-1' : ''} text-slate-500 hover:bg-rose-500/10 hover:text-rose-300`}
                       onClick={() => onDelete(getItemId(document))}
                     >
                       Usuń
@@ -709,6 +772,286 @@ const getAnalysisItems = (analysis, keys) => {
   }
   return [];
 };
+
+const VALUATION_METRIC_SPECS = [
+  { label: 'C/Z', aliases: ['C/Z', 'P/E', 'PE', 'Cena/Zysk'], valueType: 'multiple' },
+  { label: 'C/WK', aliases: ['C/WK', 'P/B', 'PB', 'Cena/Wartość księgowa'] },
+  { label: 'C/WK Grahama', aliases: ['C/WK Grahama', 'Graham P/B', 'Wskaźnik Grahama'] },
+  { label: 'C/P', aliases: ['C/P', 'P/CF', 'Cena/Przepływy'] },
+  { label: 'C/S', aliases: ['C/S', 'P/S', 'Cena/Sprzedaż'] },
+  { label: 'C/ZO', aliases: ['C/ZO', 'Cena/Zysk operacyjny', 'P/EBIT'] },
+  { label: 'EV/P', aliases: ['EV/P', 'EV/Sales', 'EV/Przychody'] },
+  { label: 'EV/EBIT', aliases: ['EV/EBIT'] },
+  { label: 'EV/EBITDA', aliases: ['EV/EBITDA'] },
+  { label: 'ROA', aliases: ['ROA', 'Rentowność aktywów'], valueType: 'percent' },
+  { label: 'ROE', aliases: ['ROE', 'Rentowność kapitału własnego'], valueType: 'percent' },
+].map((spec) => ({ valueType: 'multiple', ...spec, aliases: spec.aliases.map(normalizeText) }));
+
+const FINANCIAL_RESULT_SPECS = [
+  { label: 'Przychody ze sprzedaży', aliases: ['Przychody ze sprzedaży', 'Przychody', 'Sprzedaż'], aggregation: 'sum' },
+  { label: 'Zysk (strata) ze sprzedaży', aliases: ['Zysk ze sprzedaży', 'Strata ze sprzedaży', 'Zysk strata ze sprzedaży'], aggregation: 'sum' },
+  { label: 'Zysk operacyjny (EBIT)', aliases: ['Zysk operacyjny', 'EBIT'], aggregation: 'sum' },
+  { label: 'Zysk (strata) z działalności gospodarczej', aliases: ['Zysk z działalności gospodarczej', 'Strata z działalności gospodarczej', 'Wynik z działalności gospodarczej'], aggregation: 'sum' },
+  { label: 'Zysk netto', aliases: ['Zysk netto', 'Strata netto', 'Wynik netto'], aggregation: 'sum' },
+  { label: 'Aktywa ogółem', aliases: ['Aktywa ogółem', 'Suma aktywów', 'Aktywa razem'], aggregation: 'q4' },
+  { label: 'Aktywa obrotowe', aliases: ['Aktywa obrotowe'], aggregation: 'q4' },
+  { label: 'Zobowiązania ogółem', aliases: ['Zobowiązania ogółem', 'Zobowiązania razem'], aggregation: 'q4' },
+  { label: 'Zobowiązania długoterminowe', aliases: ['Zobowiązania długoterminowe'], aggregation: 'q4' },
+  { label: 'Zobowiązania krótkoterminowe', aliases: ['Zobowiązania krótkoterminowe'], aggregation: 'q4' },
+  { label: 'Przepływy pieniężne razem', aliases: ['Przepływy pieniężne razem', 'Przepływy pieniężne netto', 'Cash flow razem'], aggregation: 'sum' },
+  { label: 'Dywidenda za dany rok', aliases: ['Dywidenda za dany rok', 'Dywidenda', 'Dividend'], aggregation: 'annual' },
+].map((spec) => ({ valueType: 'money', ...spec, aliases: spec.aliases.map(normalizeText) }));
+
+const getMetricLabel = (metric, index) => (
+  typeof metric === 'object'
+    ? metric.label || metric.name || metric.key || `Metryka ${index + 1}`
+    : `Metryka ${index + 1}`
+);
+
+const getMetricPeriod = (metric) => (
+  typeof metric === 'object'
+    ? metric.period || metric.reportingPeriod || metric.date || metric.year || 'Okres niepodany'
+    : 'Okres niepodany'
+);
+
+const getMetricRawValue = (metric) => (
+  typeof metric === 'object'
+    ? metric.value ?? metric.displayValue ?? metric.text ?? EMPTY_VALUE
+    : metric
+);
+
+const findMetricSpec = (label, specs) => {
+  const normalized = normalizeText(label);
+  return specs.find((spec) => spec.aliases.some((alias) => normalized === alias))
+    || specs.find((spec) => spec.aliases.some((alias) => alias.length >= 5 && normalized.includes(alias)));
+};
+
+const getMetricPeriodInfo = (period) => {
+  const text = String(period || 'Okres niepodany');
+  const normalized = normalizeText(text);
+  const year = Number((text.match(/(?:19|20)\d{2}/) || [])[0]) || null;
+  const romanQuarter = normalized.match(/(?:^|[^a-z0-9])(i{1,3}|iv)(?:kw|kwartal)/)?.[1];
+  const quarter = Number((normalized.match(/q([1-4])/) || normalized.match(/([1-4])q/) || normalized.match(/([1-4])kw/))?.[1])
+    || ({ i: 1, ii: 2, iii: 3, iv: 4 }[romanQuarter] || null);
+
+  return {
+    key: text,
+    label: text,
+    year,
+    quarter,
+    isQuarter: Boolean(year && quarter),
+    isSynthetic: false,
+  };
+};
+
+const getMetricUnitText = (metric) => {
+  if (!metric || typeof metric !== 'object') return '';
+  return [metric.unit, metric.currency, metric.value].filter(Boolean).join(' ');
+};
+
+const getPlnAmount = (metric) => {
+  const value = getMetricRawValue(metric);
+  const number = parseNumericValue(value);
+  if (!Number.isFinite(number)) return null;
+
+  const unit = normalizeText(getMetricUnitText(metric));
+  if (unit.includes('mld') || unit.includes('bnpln') || unit.includes('billionpln')) return number * 1_000_000_000;
+  if (unit.includes('mln') || unit.includes('millionpln')) return number * 1_000_000;
+  if (unit.includes('tys') || unit.includes('thousandpln')) return number * 1_000;
+  if (unit.includes('pln') || unit.includes('zl')) return number;
+  return null;
+};
+
+const formatMlnPln = (amountPln) => {
+  const value = amountPln / 1_000_000;
+  return `${new Intl.NumberFormat('pl-PL', {
+    maximumFractionDigits: Math.abs(value) >= 100 ? 0 : 1,
+  }).format(value)} mln PLN`;
+};
+
+const formatMetricNumber = (value, maximumFractionDigits = 2) => new Intl.NumberFormat('pl-PL', {
+  maximumFractionDigits,
+}).format(value);
+
+const formatMetricValue = (metric, spec) => {
+  const rawValue = getMetricRawValue(metric);
+  const number = parseNumericValue(rawValue);
+  const normalizedUnit = normalizeText(getMetricUnitText(metric));
+
+  if (spec.valueType === 'money') {
+    if (normalizeText(spec.label).includes('dywidenda') && normalizedUnit.includes('akcj') && Number.isFinite(number)) {
+      return `${formatMetricNumber(number, 2)} PLN/akcję`;
+    }
+    const amountPln = getPlnAmount(metric);
+    if (amountPln !== null) return formatMlnPln(amountPln);
+  }
+
+  if (spec.valueType === 'percent' && Number.isFinite(number)) {
+    const percent = !normalizedUnit.includes('proc') && !normalizedUnit.includes('percent') && !normalizedUnit.includes('%') && Math.abs(number) <= 1
+      ? number * 100
+      : number;
+    return `${formatMetricNumber(percent, 2)}%`;
+  }
+
+  if (spec.valueType === 'multiple' && Number.isFinite(number)) {
+    return `${formatMetricNumber(number, 2)}x`;
+  }
+
+  if (Number.isFinite(number) && !normalizedUnit) return formatMetricNumber(number, 2);
+  return String(rawValue ?? EMPTY_VALUE);
+};
+
+const normalizeMetricCell = (metric, spec) => {
+  const source = typeof metric === 'object' ? metric.source || metric.sourceTitle : '';
+  const trend = typeof metric === 'object' ? metric.trend || metric.yearOverYear : '';
+  return {
+    metric,
+    display: formatMetricValue(metric, spec),
+    amountPln: getPlnAmount(metric),
+    source,
+    trend,
+    note: '',
+  };
+};
+
+const sortPeriods = (left, right) => {
+  if (left.year !== right.year) return (right.year || 0) - (left.year || 0);
+  if (left.isSynthetic !== right.isSynthetic) return left.isSynthetic ? -1 : 1;
+  if (left.quarter !== right.quarter) return (right.quarter || 0) - (left.quarter || 0);
+  return left.label.localeCompare(right.label, 'pl');
+};
+
+const buildMetricTable = (metrics, specs, { aggregateAnnual = false } = {}) => {
+  const rows = specs.map((spec) => ({ spec, values: new Map() }));
+  const byLabel = new Map(rows.map((row) => [row.spec.label, row]));
+  const periods = new Map();
+
+  metrics.forEach((metric, index) => {
+    const spec = findMetricSpec(getMetricLabel(metric, index), specs);
+    if (!spec) return;
+
+    const periodInfo = getMetricPeriodInfo(getMetricPeriod(metric));
+    periods.set(periodInfo.key, periodInfo);
+    byLabel.get(spec.label).values.set(periodInfo.key, normalizeMetricCell(metric, spec));
+  });
+
+  if (aggregateAnnual) {
+    rows.forEach((row) => {
+      const byYear = new Map();
+      [...row.values.entries()].forEach(([key, cell]) => {
+        const periodInfo = periods.get(key);
+        if (!periodInfo?.isQuarter) return;
+        if (!byYear.has(periodInfo.year)) byYear.set(periodInfo.year, new Map());
+        byYear.get(periodInfo.year).set(periodInfo.quarter, cell);
+      });
+
+      byYear.forEach((quarters, year) => {
+        if (![1, 2, 3, 4].every((quarter) => quarters.has(quarter))) return;
+        const key = `FY:${year}`;
+        const periodInfo = { key, label: `${year}`, year, quarter: 5, isSynthetic: true };
+        periods.set(key, periodInfo);
+
+        if (row.spec.aggregation === 'sum') {
+          const amountPln = [1, 2, 3, 4].reduce((total, quarter) => total + (quarters.get(quarter).amountPln || 0), 0);
+          row.values.set(key, {
+            display: formatMlnPln(amountPln),
+            amountPln,
+            note: 'suma Q1-Q4',
+            source: '',
+            trend: '',
+          });
+        }
+
+        if (row.spec.aggregation === 'q4') {
+          row.values.set(key, {
+            ...quarters.get(4),
+            note: 'stan na koniec Q4',
+          });
+        }
+      });
+    });
+  }
+
+  const sortedPeriods = [...periods.values()].sort(sortPeriods);
+  return {
+    periods: sortedPeriods.length ? sortedPeriods : [{ key: 'current', label: 'Wartość', isSynthetic: false }],
+    rows,
+  };
+};
+
+const FinancialMetricTable = ({ title, description, metrics, specs, aggregateAnnual = false }) => {
+  const table = buildMetricTable(metrics, specs, { aggregateAnnual });
+
+  return (
+    <div>
+      <div className="mb-3">
+        <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{title}</p>
+        {description && <p className="mt-1 text-xs leading-5 text-slate-500">{description}</p>}
+      </div>
+      <div className="overflow-hidden rounded-xl border border-slate-800/80">
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-slate-800/80 text-left text-sm">
+            <thead className="bg-slate-950/60 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="sticky left-0 z-10 min-w-56 bg-slate-950/95 px-3 py-3">Metryka</th>
+                {table.periods.map((period) => (
+                  <th key={period.key} className="min-w-40 px-3 py-3">
+                    <span>{period.label}</span>
+                    {period.isSynthetic && <span className="ml-2 rounded border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-300">rok</span>}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/70 bg-slate-900">
+              {table.rows.map((row) => (
+                <tr key={row.spec.label}>
+                  <th className="sticky left-0 z-10 bg-slate-900 px-3 py-3 text-xs font-semibold text-slate-300">{row.spec.label}</th>
+                  {table.periods.map((period) => {
+                    const cell = row.values.get(period.key);
+                    return (
+                      <td key={`${row.spec.label}-${period.key}`} className="px-3 py-3 align-top text-slate-200">
+                        {cell ? (
+                          <div>
+                            <p className="font-mono text-sm font-semibold">{cell.display}</p>
+                            {(cell.note || cell.trend || cell.source) && (
+                              <p className="mt-1 text-xs leading-5 text-slate-500">
+                                {[cell.note, cell.trend && `Trend: ${cell.trend}`, cell.source].filter(Boolean).join(' · ')}
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-slate-600">{EMPTY_VALUE}</span>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const MetricMatrix = ({ metrics }) => (
+  <div className="space-y-6">
+    <FinancialMetricTable
+      title="Wskaźniki wyceny i rentowności"
+      description="Stały układ najważniejszych wskaźników; brak wartości oznacza, że model nie znalazł jej wiarygodnie w dokumentach."
+      metrics={metrics}
+      specs={VALUATION_METRIC_SPECS}
+    />
+    <FinancialMetricTable
+      title="Wyniki finansowe"
+      description="Kwoty są normalizowane do mln PLN. Dla kompletu Q1-Q4 dodawana jest kolumna roczna: suma dla wyników i przepływów, stan Q4 dla pozycji bilansowych."
+      metrics={metrics}
+      specs={FINANCIAL_RESULT_SPECS}
+      aggregateAnnual
+    />
+  </div>
+);
 
 const AnalysisPreview = ({ analysis, helperOnline, busy, onApprove }) => {
   if (!analysis) {
@@ -756,19 +1099,7 @@ const AnalysisPreview = ({ analysis, helperOnline, busy, onApprove }) => {
             </ul>
           </div>
         )}
-        {metrics.length > 0 && (
-          <div>
-            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Metryki</p>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              {metrics.map((metric, index) => {
-                const label = typeof metric === 'object' ? metric.label || metric.name || metric.key : `Metryka ${index + 1}`;
-                const value = typeof metric === 'object' ? metric.value ?? metric.displayValue ?? metric.text : metric;
-                const context = typeof metric === 'object' ? [metric.period, metric.unit].filter(Boolean).join(' · ') : '';
-                return <Metric key={`${label}-${index}`} label={label} value={`${value ?? EMPTY_VALUE}${context ? ` · ${context}` : ''}`} />;
-              })}
-            </div>
-          </div>
-        )}
+        <MetricMatrix metrics={metrics} />
         {risks.length > 0 && (
           <div>
             <p className="mb-2 text-xs font-bold uppercase tracking-wide text-rose-300">Ryzyka</p>
@@ -842,6 +1173,7 @@ const getProfileParts = (response, fallback) => {
 const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperError, budget, onRefreshOverview, onBudgetUpdate, busy, setBusy, setNotice }) => {
   const [detail, setDetail] = useState(() => getProfileParts(null, fallbackProfile));
   const [loading, setLoading] = useState(false);
+  const [operationMessage, setOperationMessage] = useState('');
   const [detailError, setDetailError] = useState('');
   const [selectedDocumentIds, setSelectedDocumentIds] = useState([]);
 
@@ -902,12 +1234,13 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
     }
   };
 
-  const perform = async (task, successMessage) => {
+  const perform = async (task, successMessage, loadingMessage = 'Przetwarzam operację analizy...') => {
     if (!helperOnline) {
       setNotice({ type: 'error', text: 'Uruchom lokalny helper, aby wykonać tę akcję.' });
       return null;
     }
     setBusy(true);
+    setOperationMessage(loadingMessage);
     try {
       const result = await task();
       if (successMessage) setNotice({ type: 'success', text: successMessage });
@@ -918,17 +1251,19 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
       return null;
     } finally {
       setBusy(false);
+      setOperationMessage('');
     }
   };
 
   const addSource = (source) => perform(async () => {
     await ensureProfile();
     return analysisApi.addSource(assetId, source);
-  }, 'Źródło zapisane.');
+  }, 'Źródło zapisane.', 'Zapisuję źródło w lokalnym profilu analizy...');
 
   const deleteSource = (sourceId) => perform(
     () => analysisApi.deleteSource(assetId, sourceId),
     'Źródło usunięte.',
+    'Usuwam źródło z konfiguracji profilu...',
   );
 
   const discover = () => perform(async () => {
@@ -936,31 +1271,35 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
     return analysisApi.discoverCandidates(assetId, {
       sourceIds: sources.map(getItemId).filter(Boolean),
     });
-  }, 'Wyszukiwanie kandydatów zostało zakończone. Wybierz dokument przed analizą.');
+  }, 'Wyszukiwanie kandydatów zostało zakończone. Wybierz dokument przed analizą.', 'Szukam dokumentów w zapisanych źródłach...');
 
   const approveCandidate = (candidateId) => perform(
     () => analysisApi.approveCandidate(assetId, candidateId, { download: true }),
     'Dokument został zatwierdzony i zarchiwizowany lokalnie.',
+    'Pobieram i archiwizuję wybrany dokument lokalnie...',
   );
 
   const importDocument = (file, metadata) => perform(async () => {
     await ensureProfile();
     return analysisApi.importDocument(assetId, file, metadata);
-  }, 'Dokument został zapisany lokalnie.');
+  }, 'Dokument został zapisany lokalnie.', 'Importuję dokument do lokalnego archiwum...');
 
   const deleteDocument = (documentId) => perform(
     () => analysisApi.deleteDocument(documentId),
     'Dokument usunięty z archiwum.',
+    'Usuwam dokument z lokalnego archiwum...',
   );
 
   const runAnalysis = () => perform(
     () => analysisApi.runAnalysis(assetId, { documentIds: selectedDocumentIds, model: 'sonar-pro' }),
     'Powstał szkic analizy. Sprawdź go przed zapisaniem.',
+    'Wysyłam zaznaczone dokumenty do analizy i czekam na szkic...',
   );
 
   const approveAnalysis = (analysisId) => perform(
     () => analysisApi.approveAnalysis(analysisId),
     'Analiza została zatwierdzona i dodana do historii.',
+    'Zatwierdzam szkic i zapisuję go w historii...',
   );
 
   const toggleDocument = (documentId) => {
@@ -987,20 +1326,16 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
             <h1 className="text-3xl font-bold text-white">{profile.name}</h1>
             <p className="mt-2 font-mono text-sm text-slate-500">{identifier || assetId}</p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <SecondaryButton disabled={!helperOnline || busy || loading} onClick={refreshDetail}>Odśwież dane</SecondaryButton>
-            <PrimaryButton
-              disabled={!helperOnline || busy || selectedDocumentIds.length === 0}
-              onClick={runAnalysis}
-              title={selectedDocumentIds.length === 0 ? 'Zaznacz co najmniej jeden zarchiwizowany dokument.' : undefined}
-            >
-              Analizuj {selectedDocumentIds.length ? `(${selectedDocumentIds.length})` : ''}
-            </PrimaryButton>
-          </div>
         </div>
       </div>
 
       <HelperBanner status={helperStatus} error={helperError || detailError} onRetry={onRefreshOverview} />
+
+      {(loading || operationMessage) && (
+        <div className="mb-6">
+          <LoadingCallout message={operationMessage || 'Wczytuję profil, źródła, dokumenty i historię analiz...'} />
+        </div>
+      )}
 
       {detailError && helperOnline && (
         <div className="mb-6 rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-200">
@@ -1008,14 +1343,38 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
         </div>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-[1.35fr_0.85fr]">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-6">
+          <AnalysisPreview analysis={activeAnalysis} helperOnline={helperOnline} busy={busy} onApprove={approveAnalysis} />
           <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
             <SectionHeading
               title="Bieżąca pozycja"
               description="Wycena pochodzi wyłącznie z zaimportowanych danych portfela; nie jest pobierana przez Perplexity."
             />
             <PositionSummary positions={profile.positions || fallbackProfile.positions} />
+          </section>
+          <AnalysisHistory analyses={detail.analyses} />
+          <SecondOpinion profile={profile} />
+        </div>
+        <div className="space-y-4 xl:sticky xl:top-6 xl:self-start">
+          <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-4 shadow-xl">
+            <SectionHeading
+              title="Konfiguracja analizy"
+              description="Wybierz dokumenty, odśwież dane albo uruchom analizę dla zaznaczonych materiałów."
+            />
+            <div className="grid gap-2">
+              <SecondaryButton disabled={!helperOnline || busy || loading} onClick={refreshDetail}>Odśwież dane</SecondaryButton>
+              <PrimaryButton
+                disabled={!helperOnline || busy || selectedDocumentIds.length === 0}
+                onClick={runAnalysis}
+                title={selectedDocumentIds.length === 0 ? 'Zaznacz co najmniej jeden zarchiwizowany dokument.' : undefined}
+              >
+                Analizuj {selectedDocumentIds.length ? `(${selectedDocumentIds.length})` : ''}
+              </PrimaryButton>
+              <p className="text-xs leading-5 text-slate-500">
+                Zaznaczone dokumenty: {selectedDocumentIds.length}. Analiza korzysta z lokalnego archiwum i zapisanych źródeł.
+              </p>
+            </div>
           </section>
           <SourceList
             sources={sources}
@@ -1040,20 +1399,17 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
             onImport={importDocument}
             onDelete={deleteDocument}
             getDownloadUrl={analysisApi.getDocumentDownloadUrl}
+            compact
           />
-        </div>
-        <div className="space-y-6">
-          <AnalysisPreview analysis={activeAnalysis} helperOnline={helperOnline} busy={busy} onApprove={approveAnalysis} />
-          <AnalysisHistory analyses={detail.analyses} />
-          <SecondOpinion profile={profile} />
-      <BudgetPanel
-        key={`budget-${budget?.monthlyLimitUsd ?? budget?.limitUsd ?? 10}`}
+          <BudgetPanel
+            key={`budget-${budget?.monthlyLimitUsd ?? budget?.limitUsd ?? 10}`}
             budget={budget}
             helperOnline={helperOnline}
             onUpdate={onBudgetUpdate}
             onExport={() => setNotice({ type: 'info', text: 'Pełny backup jest dostępny z listy wszystkich aktywów.' })}
             onImport={() => setNotice({ type: 'info', text: 'Import backupu jest dostępny z listy wszystkich aktywów.' })}
             busy={busy}
+            compact
           />
         </div>
       </div>

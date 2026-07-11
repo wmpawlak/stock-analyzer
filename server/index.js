@@ -327,6 +327,7 @@ const handleRoute = async ({ request, response, store, apiKey, fetchImpl }) => {
             period: document.reporting_period,
             publishedAt: document.published_at,
             sourceUrl: document.source_url,
+            mimeType: document.mime_type,
           })),
           documentBuffers: buffers,
           fetchImpl,
