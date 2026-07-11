@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "helper": "node server/index.js",
+    "dev:all": "node server/dev.mjs",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",

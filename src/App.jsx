@@ -3,6 +3,7 @@ import Settings from './pages/Settings';
 import Portfolio from './pages/Portfolio';
 import LiveData from './pages/LiveData';
 import Investments from './pages/Investments';
+import Analysis from './pages/Analysis';
 
 const Sidebar = () => {
   const linkStyle = ({ isActive }) =>
@@ -46,6 +47,12 @@ const Sidebar = () => {
             </svg>
             Inwestycje
           </NavLink>
+          <NavLink to="/analysis" className={linkStyle}>
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 3a6.75 6.75 0 100 13.5 6.75 6.75 0 000-13.5zM15 15l6 6M9.75 6v3.75l2.25 1.5" />
+            </svg>
+            Analiza
+          </NavLink>
           <NavLink to="/live" className={linkStyle}>
             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
@@ -82,6 +89,8 @@ function App() {
           <Routes>
             <Route path="/" element={<Portfolio />} />
             <Route path="/investments" element={<Investments />} />
+            <Route path="/analysis" element={<Analysis />} />
+            <Route path="/analysis/:assetId" element={<Analysis />} />
             <Route path="/live" element={<LiveData />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/data" element={<Navigate to="/settings" replace />} />

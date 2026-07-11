@@ -333,7 +333,7 @@ const Settings = () => {
               onChange={handleDummyDataChange}
               spellCheck={false}
               className="w-full min-h-[320px] p-4 bg-slate-950/70 border border-slate-700/50 rounded-lg font-mono text-xs text-slate-300 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50 resize-y"
-              placeholder='{"Podsumowanie aktywow": [{"Kategoria": "Gotowka", "Wartosc PLN": "1000"}]}'
+              placeholder='{"Podsumowanie aktywów": [{"Kategoria": "Gotowka", "Wartosc PLN": "1000"}]}'
             />
 
             {dummyDataError && (

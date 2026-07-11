@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Link } from 'react-router-dom';
 import { fetchAlphaVantageOverview } from '../../utils/alphaVantage.js';
+import { getAnalysisRoute, resolveAnalysisIdentity } from '../../utils/analysisAssets.js';
 import {
   METRIC_DEFINITIONS,
   getPositionMetrics,
@@ -116,6 +118,10 @@ const InvestmentDetailsModal = ({ portfolioName, row, portfolioRows, onClose }) 
   const [overviewResult, setOverviewResult] = useState(null);
 
   const instrument = useMemo(() => resolveInstrument(row), [row]);
+  const analysisProfile = useMemo(() => resolveAnalysisIdentity({
+    quote: instrument.quote,
+    label: instrument.label,
+  }), [instrument.label, instrument.quote]);
   const positionMetrics = useMemo(
     () => getPositionMetrics(row, portfolioRows),
     [row, portfolioRows],
@@ -193,6 +199,12 @@ const InvestmentDetailsModal = ({ portfolioName, row, portfolioRows, onClose }) 
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
+              <Link
+                to={getAnalysisRoute(analysisProfile.assetId)}
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-violet-500/20 bg-violet-500/10 px-3 py-2 text-xs font-semibold text-violet-200 transition-colors hover:bg-violet-500/20"
+              >
+                Pełna analiza
+              </Link>
               {instrument.url && (
                 <a
                   href={instrument.url}

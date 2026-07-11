@@ -47,4 +47,36 @@ Dashboard używa danych live, jeśli cache zawiera zakres o nazwie `Podsumowanie
 
 ## Prywatność
 
-Aplikacja nie wysyła danych portfela do backendu projektu. Dane są zapisywane lokalnie w przeglądarce. Jedyny zewnętrzny request dotyczy pobierania wskazanego przez użytkownika arkusza Google Sheets.
+Aplikacja nie wysyła danych portfela do zdalnego backendu projektu. Dane portfela pozostają lokalne. Zewnętrzne requesty występują wyłącznie po świadomej akcji użytkownika: pobraniu Google Sheets, pobraniu wskazanego raportu albo uruchomieniu Perplexity dla zatwierdzonych dokumentów.
+
+## Analiza raportów
+
+Zakładka **Analiza** jest lokalną biblioteką raportów i analiz dla aktywów z portfela oraz listy obserwowanych. Pilot zawiera profile:
+
+- `CDR:WSE` → CD PROJEKT,
+- `EIMI:LON` → iShares Core MSCI EM IMI UCITS ETF USD (Acc), ISIN `IE00BKM4GZ66`.
+
+Uruchomienie w trybie deweloperskim razem z lokalnym helperem:
+
+```bash
+npm run dev:all
+```
+
+Można też uruchomić je osobno:
+
+```bash
+npm run helper # API, SQLite i dokumenty na 127.0.0.1:4310
+npm run dev    # interfejs Vite
+```
+
+Helper zapisuje bazę, raporty, rozpakowane paczki ZIP i backupy w `data/`; katalog jest wykluczony z Gita. Klucz ustaw lokalnie w `.env.local`:
+
+```env
+PERPLEXITY_API_KEY=...
+```
+
+Nie używaj prefiksu `VITE_`: klucz pozostaje wyłącznie po stronie helpera. Samo otwarcie aktywa nie wykonuje żadnego zewnętrznego ani płatnego zapytania. Przepływ to: wyszukanie kandydata → zatwierdzenie i lokalne archiwum oryginału → analiza → podgląd szkicu → zatwierdzenie historii. Ręczny upload raportu jest dostępny w każdej chwili.
+
+Wyszukanie używa modelu `sonar`, a analiza zatwierdzonych dokumentów `sonar-pro`. Aplikacja ma domyślny limit 10 USD miesięcznie i zapisuje koszt zwrócony przez API; ustawienia rozliczeń Perplexity nadal są ostateczną kontrolą wydatków. Wybrane dokumenty są wysyłane do Perplexity dopiero po kliknięciu **Analizuj**. Perplexity obsługuje załączniki PDF/DOC/DOCX/TXT/RTF oraz JSON Schema w odpowiedziach, co wykorzystuje helper. [Dokumentacja załączników](https://docs.perplexity.ai/docs/sonar/media), [structured outputs](https://docs.perplexity.ai/docs/sonar/features).
+
+Pełny backup zawiera SQLite, wszystkie archiwalne dokumenty, manifest i snapshot `localStorage` przeglądarki. Import przywraca dane analityczne, a po rozpoznaniu snapshotu odświeża aplikację.

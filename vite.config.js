@@ -7,4 +7,14 @@
         react(),
         tailwindcss(),
       ],
+      server: {
+        proxy: {
+          '/api': 'http://127.0.0.1:4310',
+        },
+      },
+      preview: {
+        proxy: {
+          '/api': 'http://127.0.0.1:4310',
+        },
+      },
     })
