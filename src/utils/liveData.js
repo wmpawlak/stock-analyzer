@@ -1,4 +1,5 @@
 import { normalizeText, parseNumericValue } from './number.js';
+import { readPersistentJson } from './persistentStorage.js';
 import { getChartDateValue } from '../components/portfolio/chartConfig.js';
 
 export const FETCHED_LIVE_DATA_KEY = 'fetchedLiveData';
@@ -55,12 +56,7 @@ const findColumn = (keys, aliases) => {
 };
 
 const readStoredJson = (key) => {
-  try {
-    const savedData = localStorage.getItem(key);
-    return savedData ? JSON.parse(savedData) : null;
-  } catch {
-    return null;
-  }
+  return readPersistentJson(key, null);
 };
 
 const hasUsableRows = (rows) => (

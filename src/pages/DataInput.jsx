@@ -6,6 +6,10 @@ import {
   setAssets,
   setPortfolioHistory,
 } from '../features/portfolioSlice';
+import {
+  readPersistentString,
+  writePersistentString,
+} from '../utils/persistentStorage';
 
 const STOCK_HEADERS = [
   'Akcje i inne instrumenty',
@@ -82,10 +86,10 @@ const getGoogleFinanceLink = (query) => {
 
 const DataInput = () => {
   const [activeTab, setActiveTab] = useState('ogolne');
-  const [inputText, setInputText] = useState(() => localStorage.getItem('portfolioInputText') || '');
+  const [inputText, setInputText] = useState(() => readPersistentString('portfolioInputText', ''));
   const [portfolioName, setPortfolioName] = useState('');
   const [portfolioCsv, setPortfolioCsv] = useState('');
-  const [historyText, setHistoryText] = useState(() => localStorage.getItem('portfolioHistoryText') || '');
+  const [historyText, setHistoryText] = useState(() => readPersistentString('portfolioHistoryText', ''));
 
   const dispatch = useDispatch();
   const stockPortfolios = useSelector((state) => state.portfolio.stockPortfolios);
@@ -100,13 +104,13 @@ const DataInput = () => {
   const handleTextChange = (event) => {
     const text = event.target.value;
     setInputText(text);
-    localStorage.setItem('portfolioInputText', text);
+    void writePersistentString('portfolioInputText', text);
   };
 
   const handleHistoryChange = (event) => {
     const text = event.target.value;
     setHistoryText(text);
-    localStorage.setItem('portfolioHistoryText', text);
+    void writePersistentString('portfolioHistoryText', text);
   };
 
   const handleAddStockPortfolio = () => {

@@ -127,6 +127,27 @@ const handleRoute = async ({ request, response, store, apiKey, fetchImpl }) => {
     return;
   }
 
+  if (parts[0] === 'state') {
+    if (parts.length === 1 && method === 'GET') {
+      sendData(response, store.listAppState());
+      return;
+    }
+    if (parts.length === 1 && method === 'PATCH') {
+      const body = await readJsonBody(request);
+      sendData(response, store.updateAppState(body.state && typeof body.state === 'object' ? body.state : body));
+      return;
+    }
+    if (parts.length === 2 && parts[1] === 'migrate' && method === 'POST') {
+      const body = await readJsonBody(request, MAX_BROWSER_STATE_BYTES);
+      sendData(response, store.migrateAppState(body.localStorage || body));
+      return;
+    }
+    if (parts.length === 2 && method === 'DELETE') {
+      sendData(response, store.deleteAppStateKey(parts[1]));
+      return;
+    }
+  }
+
   if (parts.length === 1 && parts[0] === 'profiles') {
     if (method === 'GET') {
       sendData(response, { profiles: store.listProfiles().map(toApiProfile) });

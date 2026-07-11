@@ -3,6 +3,10 @@ import { createPortal } from 'react-dom';
 import InvestmentDetailsModal from '../components/investments/InvestmentDetailsModal.jsx';
 import useLiveData from '../hooks/useLiveData.js';
 import { notifyLiveDataChanged } from '../utils/liveData.js';
+import {
+    readPersistentJson,
+    writePersistentJson,
+} from '../utils/persistentStorage.js';
 
 const PORTFOLIO_NAMES = ['Portfel Makler', 'Portfel IKZE'];
 const MAX_COMPACT_COLUMNS = 10;
@@ -557,28 +561,18 @@ const Investments = () => {
     const [activeModal, setActiveModal] = useState(null);
     const [activeInvestment, setActiveInvestment] = useState(null);
     const [selectedColumnsByPortfolio, setSelectedColumnsByPortfolio] = useState(() => {
-        try {
-            const saved = localStorage.getItem(SELECTED_COLUMNS_STORAGE_KEY);
-            return saved ? JSON.parse(saved) : {};
-        } catch {
-            return {};
-        }
+        return readPersistentJson(SELECTED_COLUMNS_STORAGE_KEY, {});
     });
     const [totalColumnsByPortfolio, setTotalColumnsByPortfolio] = useState(() => {
-        try {
-            const saved = localStorage.getItem(TOTAL_COLUMNS_STORAGE_KEY);
-            return saved ? JSON.parse(saved) : {};
-        } catch {
-            return {};
-        }
+        return readPersistentJson(TOTAL_COLUMNS_STORAGE_KEY, {});
     });
 
     useEffect(() => {
-        localStorage.setItem(SELECTED_COLUMNS_STORAGE_KEY, JSON.stringify(selectedColumnsByPortfolio));
+        void writePersistentJson(SELECTED_COLUMNS_STORAGE_KEY, selectedColumnsByPortfolio);
     }, [selectedColumnsByPortfolio]);
 
     useEffect(() => {
-        localStorage.setItem(TOTAL_COLUMNS_STORAGE_KEY, JSON.stringify(totalColumnsByPortfolio));
+        void writePersistentJson(TOTAL_COLUMNS_STORAGE_KEY, totalColumnsByPortfolio);
     }, [totalColumnsByPortfolio]);
 
     const portfolios = useMemo(() => PORTFOLIO_NAMES.map((name) => ({

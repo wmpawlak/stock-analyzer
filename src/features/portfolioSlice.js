@@ -1,4 +1,9 @@
 import { createSlice } from '@reduxjs/toolkit';
+import {
+  readPersistentJson,
+  removePersistentKey,
+  writePersistentJson,
+} from '../utils/persistentStorage.js';
 
 const PORTFOLIO_STORAGE_KEYS = [
   'portfolioAssets',
@@ -9,12 +14,7 @@ const PORTFOLIO_STORAGE_KEYS = [
 ];
 
 const loadFromCache = (key) => {
-  try {
-    const cached = localStorage.getItem(key);
-    return cached ? JSON.parse(cached) : [];
-  } catch {
-    return [];
-  }
+  return readPersistentJson(key, []);
 };
 
 const initialState = {
@@ -29,7 +29,7 @@ const portfolioSlice = createSlice({
   reducers: {
     setAssets: (state, action) => {
       state.assets = action.payload;
-      localStorage.setItem('portfolioAssets', JSON.stringify(action.payload));
+      void writePersistentJson('portfolioAssets', action.payload);
     },
     addStockPortfolio: (state, action) => {
       const idx = state.stockPortfolios.findIndex((portfolio) => (
@@ -39,23 +39,23 @@ const portfolioSlice = createSlice({
       if (idx >= 0) state.stockPortfolios[idx] = action.payload;
       else state.stockPortfolios.push(action.payload);
 
-      localStorage.setItem('stockPortfolios', JSON.stringify(state.stockPortfolios));
+      void writePersistentJson('stockPortfolios', state.stockPortfolios);
     },
     removeStockPortfolio: (state, action) => {
       state.stockPortfolios = state.stockPortfolios.filter((portfolio) => (
         portfolio.id !== action.payload
       ));
-      localStorage.setItem('stockPortfolios', JSON.stringify(state.stockPortfolios));
+      void writePersistentJson('stockPortfolios', state.stockPortfolios);
     },
     setPortfolioHistory: (state, action) => {
       state.portfolioHistory = action.payload;
-      localStorage.setItem('portfolioHistory', JSON.stringify(action.payload));
+      void writePersistentJson('portfolioHistory', action.payload);
     },
     clearPortfolioData: (state) => {
       state.assets = [];
       state.stockPortfolios = [];
       state.portfolioHistory = [];
-      PORTFOLIO_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
+      PORTFOLIO_STORAGE_KEYS.forEach((key) => void removePersistentKey(key));
     },
   },
 });

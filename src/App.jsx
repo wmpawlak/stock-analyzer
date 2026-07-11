@@ -1,17 +1,35 @@
+import { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Navigate, NavLink, Route, Routes } from 'react-router-dom';
 import Settings from './pages/Settings';
 import Portfolio from './pages/Portfolio';
 import LiveData from './pages/LiveData';
 import Investments from './pages/Investments';
 import Analysis from './pages/Analysis';
+import { PERSISTENT_STATUS_EVENT, isPersistentHelperOnline } from './utils/persistentStorage.js';
 
 const Sidebar = () => {
+  const [persistentStatus, setPersistentStatus] = useState(() => ({
+    online: isPersistentHelperOnline(),
+    error: '',
+  }));
   const linkStyle = ({ isActive }) =>
     `flex items-center gap-3 px-4 py-3 mt-1.5 text-sm font-medium rounded-xl transition-all duration-200 ${
       isActive
         ? 'bg-blue-600/10 text-blue-400 border-l-4 border-blue-500 pl-3 font-semibold'
         : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border-l-4 border-transparent'
     }`;
+
+  useEffect(() => {
+    const handleStatus = (event) => {
+      setPersistentStatus({
+        online: Boolean(event.detail?.online),
+        error: event.detail?.error || '',
+      });
+    };
+
+    window.addEventListener(PERSISTENT_STATUS_EVENT, handleStatus);
+    return () => window.removeEventListener(PERSISTENT_STATUS_EVENT, handleStatus);
+  }, []);
 
   return (
     <div className="w-64 min-h-screen bg-slate-900 border-r border-slate-800/80 px-4 py-8 flex flex-col justify-between shrink-0">
@@ -71,10 +89,16 @@ const Sidebar = () => {
 
       <div className="bg-slate-800/40 border border-slate-800 p-4 rounded-xl">
         <div className="flex items-center gap-2">
-          <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></div>
-          <p className="text-xs font-semibold text-slate-300">Wszystkie systemy online</p>
+          <div className={`w-2.5 h-2.5 rounded-full ${persistentStatus.online ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'}`}></div>
+          <p className="text-xs font-semibold text-slate-300">
+            {persistentStatus.online ? 'Dane zapisane w /data' : 'Tryb cache przegladarki'}
+          </p>
         </div>
-        <p className="text-[10px] text-slate-500 mt-1">Lokalna baza danych aktywna</p>
+        <p className="text-[10px] text-slate-500 mt-1">
+          {persistentStatus.online
+            ? 'Lokalna baza danych aktywna'
+            : 'Uruchom helper, aby nowe zmiany byly trwale'}
+        </p>
       </div>
     </div>
   );

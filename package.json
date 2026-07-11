@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node server/dev.mjs",
+    "dev:vite": "vite",
     "helper": "node server/index.js",
     "dev:all": "node server/dev.mjs",
     "build": "vite build",

@@ -1,24 +1,19 @@
 import { mapAlphaVantageOverview } from './investmentDetails.js';
+import {
+  readPersistentJson,
+  writePersistentJson,
+} from './persistentStorage.js';
 
 const CACHE_KEY = 'investmentAlphaVantageCache';
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const OVERVIEW_URL = 'https://www.alphavantage.co/query';
 
 const readCache = () => {
-  try {
-    const cached = localStorage.getItem(CACHE_KEY);
-    return cached ? JSON.parse(cached) : {};
-  } catch {
-    return {};
-  }
+  return readPersistentJson(CACHE_KEY, {});
 };
 
 const writeCache = (cache) => {
-  try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
-  } catch {
-    // Cache is an optimization; failed storage should not block the modal.
-  }
+  void writePersistentJson(CACHE_KEY, cache);
 };
 
 export const getAlphaVantageApiKey = () => (

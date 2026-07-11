@@ -6,6 +6,11 @@ import {
   FETCHED_LIVE_DATA_KEY,
   notifyLiveDataChanged,
 } from '../utils/liveData';
+import {
+  readPersistentJson,
+  removePersistentKey,
+  writePersistentJson,
+} from '../utils/persistentStorage';
 
 const fetchSheetData = async (url, sheetName, range) => {
   if (!url) {
@@ -50,38 +55,28 @@ const LiveData = () => {
   const [sheetName, setSheetName] = useState('');
   const [range, setRange] = useState('');
   const [jsonData, setJsonData] = useState(() => {
-    try {
-      const saved = localStorage.getItem(FETCHED_LIVE_DATA_KEY);
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
+    return readPersistentJson(FETCHED_LIVE_DATA_KEY, null);
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [savedConfigs, setSavedConfigs] = useState(() => {
-    try {
-      const saved = localStorage.getItem('liveDataConfigs');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
+    return readPersistentJson('liveDataConfigs', []);
   });
   const [isJsonModalOpen, setIsJsonModalOpen] = useState(false);
   const [editingConfig, setEditingConfig] = useState(null);
 
   useEffect(() => {
     if (jsonData) {
-      localStorage.setItem(FETCHED_LIVE_DATA_KEY, JSON.stringify(jsonData));
+      void writePersistentJson(FETCHED_LIVE_DATA_KEY, jsonData);
     } else {
-      localStorage.removeItem(FETCHED_LIVE_DATA_KEY);
+      void removePersistentKey(FETCHED_LIVE_DATA_KEY);
     }
 
     notifyLiveDataChanged();
   }, [jsonData]);
 
   useEffect(() => {
-    localStorage.setItem('liveDataConfigs', JSON.stringify(savedConfigs));
+    void writePersistentJson('liveDataConfigs', savedConfigs);
   }, [savedConfigs]);
 
   const handleEditClick = (config) => {

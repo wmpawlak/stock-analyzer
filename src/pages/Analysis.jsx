@@ -14,6 +14,10 @@ import {
   analysisApi,
   isHelperUnavailable,
 } from '../utils/analysisApi.js';
+import {
+  PERSISTENT_STATE_KEYS,
+  hydratePersistentState,
+} from '../utils/persistentStorage.js';
 
 const EMPTY_VALUE = '—';
 
@@ -158,10 +162,10 @@ const HelperBanner = ({ status, error, onRetry }) => {
 
 const getBrowserState = () => {
   const localStorageSnapshot = {};
-  for (let index = 0; index < window.localStorage.length; index += 1) {
-    const key = window.localStorage.key(index);
-    if (key) localStorageSnapshot[key] = window.localStorage.getItem(key);
-  }
+  PERSISTENT_STATE_KEYS.forEach((key) => {
+    const value = window.localStorage.getItem(key);
+    if (value !== null) localStorageSnapshot[key] = value;
+  });
 
   return {
     exportedAt: new Date().toISOString(),
@@ -1169,8 +1173,9 @@ const Analysis = () => {
     const savedState = result?.browserState?.localStorage;
     if (savedState && typeof savedState === 'object') {
       Object.entries(savedState).forEach(([key, value]) => {
-        if (typeof value === 'string') window.localStorage.setItem(key, value);
+        if (PERSISTENT_STATE_KEYS.includes(key) && typeof value === 'string') window.localStorage.setItem(key, value);
       });
+      await hydratePersistentState();
       window.setTimeout(() => window.location.reload(), 700);
     }
     return result;

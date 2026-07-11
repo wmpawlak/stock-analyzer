@@ -75,6 +75,10 @@ test('analysis store archives an original ZIP, registers extracted files and res
         },
       });
       assert.equal(store.approveAnalysis(draft.id).status, 'approved');
+      store.updateAppState({
+        fetchedLiveData: { 'Podsumowanie aktywów': [{ Kategoria: 'Gotówka', 'Wartość PLN': 1000 }] },
+        portfolioInputText: 'USD 1000,00 zł',
+      });
 
       const backup = await store.createBackup({ localStorage: { portfolioInputText: 'stan przeglądarki' } });
       const backupBuffer = await readFile(backup.absolutePath);
@@ -90,6 +94,40 @@ test('analysis store archives an original ZIP, registers extracted files and res
       assert.equal(imported.browserState.localStorage.portfolioInputText, 'stan przeglądarki');
       assert.equal(store.listDocuments('company:WSE:CDR').length, 2);
       assert.equal(store.listAnalyses('company:WSE:CDR')[0].status, 'approved');
+      assert.equal(store.listAppState().state.portfolioInputText, 'USD 1000,00 zł');
+      assert.equal(store.listAppState().state.fetchedLiveData['Podsumowanie aktywów'][0].Kategoria, 'Gotówka');
+    } finally {
+      store.close();
+    }
+  });
+});
+
+test('app state stores allowlisted values and excludes secret localStorage keys during migration', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = await createAnalysisStore({ dataDir: directory });
+    try {
+      const saved = store.updateAppState({
+        portfolioAssets: [{ label: 'Gotówka', value: 100 }],
+        portfolioInputText: 'Gotówka 100,00 zł',
+      });
+      assert.deepEqual(saved.state.portfolioAssets, [{ label: 'Gotówka', value: 100 }]);
+      assert.equal(saved.state.portfolioInputText, 'Gotówka 100,00 zł');
+
+      const migrated = store.migrateAppState({
+        localStorage: {
+          googleApiKey: 'secret-google-key',
+          geminiApiKey: 'secret-gemini-key',
+          liveDataConfigs: JSON.stringify([{ id: '1', name: 'Arkusz' }]),
+          portfolioHistoryText: '2026-01-01 100',
+        },
+      });
+
+      assert.deepEqual(migrated.state.liveDataConfigs, [{ id: '1', name: 'Arkusz' }]);
+      assert.equal(migrated.state.portfolioHistoryText, '2026-01-01 100');
+      assert.equal(Object.hasOwn(migrated.state, 'googleApiKey'), false);
+      assert.equal(Object.hasOwn(migrated.state, 'geminiApiKey'), false);
+      assert.ok(migrated.ignored.includes('googleApiKey'));
+      assert.ok(migrated.ignored.includes('geminiApiKey'));
     } finally {
       store.close();
     }
@@ -121,6 +159,27 @@ test('helper exposes local profiles and accepts a manual upload without a Perple
       const uploadPayload = await uploadResponse.json();
       assert.equal(uploadResponse.status, 201);
       assert.equal(uploadPayload.data.document.filename, 'manual.txt');
+
+      const migrateResponse = await fetch(`${base}/state/migrate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          localStorage: {
+            fetchedLiveData: JSON.stringify({ 'Zakres': [{ value: 1 }] }),
+            googleApiKey: 'secret',
+          },
+        }),
+      });
+      const migratePayload = await migrateResponse.json();
+      assert.equal(migrateResponse.status, 200);
+      assert.deepEqual(migratePayload.data.state.fetchedLiveData, { 'Zakres': [{ value: 1 }] });
+      assert.equal(Object.hasOwn(migratePayload.data.state, 'googleApiKey'), false);
+
+      const stateResponse = await fetch(`${base}/state`);
+      const statePayload = await stateResponse.json();
+      assert.equal(stateResponse.status, 200);
+      assert.equal(statePayload.data.empty, false);
+      assert.deepEqual(statePayload.data.state.fetchedLiveData, { 'Zakres': [{ value: 1 }] });
 
       const discoveryResponse = await fetch(`${base}/profiles/${encodeURIComponent('company:WSE:CDR')}/candidates/discover`, {
         method: 'POST',

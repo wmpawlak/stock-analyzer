@@ -70,6 +70,15 @@ const jsonRequest = (path, { method = 'POST', body, ...options } = {}) => apiReq
 
 export const analysisApi = {
   getHealth: () => apiRequest('/health'),
+  getState: () => apiRequest('/state'),
+  updateState: (state) => jsonRequest('/state', {
+    method: 'PATCH',
+    body: { state },
+  }),
+  deleteStateKey: (key) => apiRequest(`/state/${encodeURIComponent(key)}`, { method: 'DELETE' }),
+  migrateState: (localStorageSnapshot) => jsonRequest('/state/migrate', {
+    body: { localStorage: localStorageSnapshot },
+  }),
 
   listProfiles: async () => asArray(await apiRequest('/profiles'), 'profiles'),
   createProfile: (profile) => jsonRequest('/profiles', { body: profile }),

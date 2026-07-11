@@ -10,6 +10,12 @@ import {
   readStoredDummyData,
 } from '../utils/liveData';
 import { normalizeText } from '../utils/number';
+import {
+  readPersistentJson,
+  readPersistentString,
+  removePersistentKey,
+  writePersistentJson,
+} from '../utils/persistentStorage';
 
 const DEFAULT_COMMISSIONS = {
   gpwRate: '0.39',
@@ -21,12 +27,7 @@ const DEFAULT_COMMISSIONS = {
 const formatJson = (data) => JSON.stringify(data ?? {}, null, 2);
 
 const readStorageJson = (key, fallback) => {
-  try {
-    const saved = localStorage.getItem(key);
-    return saved ? JSON.parse(saved) : fallback;
-  } catch {
-    return fallback;
-  }
+  return readPersistentJson(key, fallback);
 };
 
 const getValueByAliases = (row, aliases) => {
@@ -99,12 +100,12 @@ const validateDummyData = (data) => {
 const getInitialDummyDataText = () => {
   const storedDummyData = readStoredDummyData();
   if (storedDummyData) return formatJson(storedDummyData);
-  if (localStorage.getItem(DUMMY_LIVE_DATA_KEY) !== null) return formatJson({});
+  if (readPersistentJson(DUMMY_LIVE_DATA_KEY, null) !== null) return formatJson({});
 
   const migratedDummyData = buildDummyDataFromLegacyCache();
   if (Object.keys(migratedDummyData).length === 0) return formatJson({});
 
-  localStorage.setItem(DUMMY_LIVE_DATA_KEY, JSON.stringify(migratedDummyData));
+  void writePersistentJson(DUMMY_LIVE_DATA_KEY, migratedDummyData);
   window.queueMicrotask(notifyLiveDataChanged);
   return formatJson(migratedDummyData);
 };
@@ -114,12 +115,7 @@ const Settings = () => {
   const { assets, portfolioHistory, stockPortfolios } = useSelector((state) => state.portfolio);
   const [statusMessage, setStatusMessage] = useState({ text: '', type: '' });
   const [commissions, setCommissions] = useState(() => {
-    try {
-      const saved = localStorage.getItem('portfolioCommissions');
-      return saved ? JSON.parse(saved) : DEFAULT_COMMISSIONS;
-    } catch {
-      return DEFAULT_COMMISSIONS;
-    }
+    return readPersistentJson('portfolioCommissions', DEFAULT_COMMISSIONS);
   });
   const [dummyDataText, setDummyDataText] = useState(getInitialDummyDataText);
   const [dummyDataError, setDummyDataError] = useState('');
@@ -135,7 +131,7 @@ const Settings = () => {
   }, [dummyDataText]);
 
   useEffect(() => {
-    localStorage.setItem('portfolioCommissions', JSON.stringify(commissions));
+    void writePersistentJson('portfolioCommissions', commissions);
   }, [commissions]);
 
   const handleCommissionChange = (event) => {
@@ -163,7 +159,7 @@ const Settings = () => {
         return;
       }
 
-      localStorage.setItem(DUMMY_LIVE_DATA_KEY, JSON.stringify(parsedData));
+      void writePersistentJson(DUMMY_LIVE_DATA_KEY, parsedData);
       setDummyDataText(formatJson(parsedData));
       setDummyDataError('');
       notifyLiveDataChanged();
@@ -174,7 +170,7 @@ const Settings = () => {
   };
 
   const handleClearDummyData = () => {
-    localStorage.removeItem(DUMMY_LIVE_DATA_KEY);
+    void removePersistentKey(DUMMY_LIVE_DATA_KEY);
     setDummyDataText(formatJson({}));
     setDummyDataError('');
     notifyLiveDataChanged();
@@ -187,10 +183,15 @@ const Settings = () => {
     }
 
     dispatch(clearPortfolioData());
-    localStorage.removeItem(FETCHED_LIVE_DATA_KEY);
-    localStorage.removeItem(DUMMY_LIVE_DATA_KEY);
-    localStorage.removeItem('investmentCompactColumns');
-    localStorage.removeItem('investmentTotalColumns');
+    [
+      FETCHED_LIVE_DATA_KEY,
+      DUMMY_LIVE_DATA_KEY,
+      'liveDataConfigs',
+      'portfolioCommissions',
+      'investmentAlphaVantageCache',
+      'investmentCompactColumns',
+      'investmentTotalColumns',
+    ].forEach((key) => void removePersistentKey(key));
     notifyLiveDataChanged();
     showStatus('Wszystkie dane zostały trwale usunięte z aplikacji.', 'error');
   };
@@ -201,10 +202,10 @@ const Settings = () => {
       timestamp: new Date().toISOString(),
       reduxState: { assets, portfolioHistory, stockPortfolios },
       localStorage: {
-        portfolioInputText: localStorage.getItem('portfolioInputText') || '',
-        portfolioHistoryText: localStorage.getItem('portfolioHistoryText') || '',
-        fetchedLiveData: localStorage.getItem(FETCHED_LIVE_DATA_KEY) || '',
-        dummyLiveData: localStorage.getItem(DUMMY_LIVE_DATA_KEY) || '',
+        portfolioInputText: readPersistentString('portfolioInputText', ''),
+        portfolioHistoryText: readPersistentString('portfolioHistoryText', ''),
+        fetchedLiveData: JSON.stringify(readPersistentJson(FETCHED_LIVE_DATA_KEY, null) || ''),
+        dummyLiveData: JSON.stringify(readPersistentJson(DUMMY_LIVE_DATA_KEY, null) || ''),
       },
     };
     const dataStr = `data:text/json;charset=utf-8,${encodeURIComponent(JSON.stringify(backupData, null, 2))}`;

@@ -36,6 +36,32 @@ import { createStoredZip, extractZipSafely, inspectZip } from './zip.js';
 
 const DATA_VERSION = 1;
 const DEFAULT_BUDGET_USD = 10;
+const APP_STATE_STRING_KEYS = new Set([
+  'portfolioInputText',
+  'portfolioHistoryText',
+]);
+const APP_STATE_SCALAR_KEYS = new Set([
+  'spreadsheetId',
+  'rangeTable',
+  'rangeCharts',
+]);
+const APP_STATE_JSON_KEYS = new Set([
+  'portfolioAssets',
+  'stockPortfolios',
+  'portfolioHistory',
+  'fetchedLiveData',
+  'dummyLiveData',
+  'liveDataConfigs',
+  'portfolioCommissions',
+  'investmentAlphaVantageCache',
+  'investmentCompactColumns',
+  'investmentTotalColumns',
+]);
+const APP_STATE_KEYS = new Set([
+  ...APP_STATE_STRING_KEYS,
+  ...APP_STATE_SCALAR_KEYS,
+  ...APP_STATE_JSON_KEYS,
+]);
 
 const PILOT_PROFILES = [
   {
@@ -203,6 +229,38 @@ const ensurePlainObject = (value, message) => {
   return value;
 };
 
+const safeStateKey = (value) => {
+  const key = stringOrEmpty(value);
+  if (!APP_STATE_KEYS.has(key)) {
+    throw new AppError('INVALID_STATE_KEY', 'Ten klucz stanu aplikacji nie moze byc zapisany w lokalnym magazynie.', 400);
+  }
+  return key;
+};
+
+const normalizeStateValue = (key, value) => {
+  if (APP_STATE_STRING_KEYS.has(key)) return typeof value === 'string' ? value : String(value ?? '');
+  if (value === undefined) throw new AppError('INVALID_STATE_VALUE', 'Wartosc stanu aplikacji nie moze byc pusta.', 400);
+  return value;
+};
+
+const parseLegacyStateValue = (key, value) => {
+  if (value === null || value === undefined) return { ok: false };
+  if (APP_STATE_STRING_KEYS.has(key)) return { ok: true, value: String(value) };
+  if (APP_STATE_SCALAR_KEYS.has(key) && typeof value === 'string') {
+    try {
+      return { ok: true, value: JSON.parse(value) };
+    } catch {
+      return { ok: true, value };
+    }
+  }
+  if (typeof value !== 'string') return { ok: true, value };
+  try {
+    return { ok: true, value: JSON.parse(value) };
+  } catch {
+    return { ok: false };
+  }
+};
+
 const listFilesRecursively = async (root, relative = '') => {
   const directory = ensureInside(root, path.join(root, relative));
   const entries = await readdir(directory, { withFileTypes: true });
@@ -346,6 +404,11 @@ export class AnalysisStore {
         created_at TEXT NOT NULL,
         metadata_json TEXT NOT NULL DEFAULT '{}'
       );
+      CREATE TABLE IF NOT EXISTS app_state (
+        key TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
       CREATE INDEX IF NOT EXISTS idx_documents_asset ON documents(asset_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_candidates_asset ON candidates(asset_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_analyses_asset ON analyses(asset_id, created_at DESC);
@@ -407,6 +470,85 @@ export class AnalysisStore {
         );
     }
     return this.getProfile(assetId);
+  }
+
+  listAppState() {
+    const rows = this.db.prepare('SELECT key, value_json, updated_at FROM app_state ORDER BY key COLLATE NOCASE').all();
+    const state = {};
+    const metadata = {};
+    rows.forEach((row) => {
+      state[row.key] = parseJson(row.value_json, null);
+      metadata[row.key] = { updatedAt: row.updated_at };
+    });
+    return {
+      state,
+      metadata,
+      keys: rows.map((row) => row.key),
+      empty: rows.length === 0,
+    };
+  }
+
+  updateAppState(input) {
+    const data = ensurePlainObject(input, 'Stan aplikacji musi byc obiektem.');
+    const entries = Object.entries(data);
+    const timestamp = nowIso(this.clock);
+    const saved = {};
+    const ignored = [];
+    const statement = this.db.prepare(`INSERT INTO app_state (key, value_json, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`);
+
+    entries.forEach(([rawKey, rawValue]) => {
+      if (!APP_STATE_KEYS.has(rawKey)) {
+        ignored.push(rawKey);
+        return;
+      }
+      const key = safeStateKey(rawKey);
+      const value = normalizeStateValue(key, rawValue);
+      statement.run(key, JSON.stringify(value), timestamp);
+      saved[key] = value;
+    });
+
+    return {
+      saved,
+      ignored,
+      state: this.listAppState().state,
+    };
+  }
+
+  deleteAppStateKey(key) {
+    const safeKey = safeStateKey(key);
+    this.db.prepare('DELETE FROM app_state WHERE key = ?').run(safeKey);
+    return { deleted: true, key: safeKey, state: this.listAppState().state };
+  }
+
+  migrateAppState(snapshot) {
+    const data = ensurePlainObject(snapshot, 'Snapshot localStorage musi byc obiektem.');
+    const state = data.localStorage && typeof data.localStorage === 'object' && !Array.isArray(data.localStorage)
+      ? data.localStorage
+      : data;
+    const migrated = {};
+    const ignored = [];
+
+    Object.entries(state).forEach(([key, value]) => {
+      if (!APP_STATE_KEYS.has(key)) {
+        ignored.push(key);
+        return;
+      }
+      const parsed = parseLegacyStateValue(key, value);
+      if (!parsed.ok) {
+        ignored.push(key);
+        return;
+      }
+      migrated[key] = parsed.value;
+    });
+
+    const result = this.updateAppState(migrated);
+    return {
+      migrated: Object.keys(result.saved),
+      ignored: [...new Set([...ignored, ...result.ignored])],
+      state: result.state,
+    };
   }
 
   updateProfile(assetId, changes) {
