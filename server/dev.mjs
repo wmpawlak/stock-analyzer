@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const viteBinary = path.join(root, 'node_modules', 'vite', 'bin', 'vite.js');
 const children = [
-  spawn(process.execPath, [path.join(root, 'server', 'index.js')], { cwd: root, stdio: 'inherit' }),
+  spawn(process.execPath, ['--use-system-ca', path.join(root, 'server', 'index.js')], { cwd: root, stdio: 'inherit' }),
   spawn(process.execPath, [viteBinary], { cwd: root, stdio: 'inherit' }),
 ];
 

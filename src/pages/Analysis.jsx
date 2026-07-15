@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import useLiveData from '../hooks/useLiveData.js';
 import { getPositionMetrics } from '../utils/investmentDetails.js';
 import { normalizeText, parseNumericValue } from '../utils/number.js';
+import { getReportMetricDefinition } from '../utils/reportMetricDefinitions.js';
 import {
   ANALYSIS_ASSET_IDS,
   getAnalysisRoute,
@@ -755,13 +757,19 @@ const DocumentList = ({ documents, selectedIds, helperOnline, busy, onToggle, on
   );
 };
 
-const getAnalysisSummary = (analysis) => (
-  analysis?.summary
-  || analysis?.content?.summary
-  || analysis?.overview
-  || analysis?.result?.summary
-  || ''
-);
+const getAnalysisSummary = (analysis) => ( 
+  analysis?.summary 
+  || analysis?.content?.summary 
+  || analysis?.overview 
+  || analysis?.result?.summary 
+  || '' 
+); 
+
+const getStructuredSummary = (analysis) => {
+  const source = analysis?.content || analysis?.result || analysis || {};
+  const summary = source.structuredSummary;
+  return summary && typeof summary === 'object' && !Array.isArray(summary) ? summary : null;
+};
 
 const getAnalysisItems = (analysis, keys) => {
   const source = analysis?.content || analysis?.result || analysis || {};
@@ -773,7 +781,198 @@ const getAnalysisItems = (analysis, keys) => {
   return [];
 };
 
-const VALUATION_METRIC_SPECS = [
+const getAnalysisContent = (analysis) => analysis?.content || analysis?.result || analysis || {};
+
+const formatPage = (page) => {
+  if (page === null || page === undefined || page === '') return '';
+  const number = Number(page);
+  return Number.isFinite(number) ? `str. ${number}` : `str. ${page}`;
+};
+
+const getSourceParts = (source = {}) => [
+  stringOrEmpty(source.documentId || source.document_id) && `dok. ${source.documentId || source.document_id}`,
+  formatPage(source.page),
+  stringOrEmpty(source.section),
+].filter(Boolean);
+
+const stringOrEmpty = (value) => (typeof value === 'string' ? value.trim() : '');
+
+const getFactSource = (fact) => ({
+  documentId: fact?.documentId || fact?.source?.documentId || fact?.source?.document_id || '',
+  page: fact?.page ?? fact?.source?.page ?? null,
+  section: fact?.section || fact?.source?.section || '',
+  evidence: fact?.quote || fact?.source?.evidence || '',
+});
+
+const formatAnalysisMetricValue = (metric) => {
+  const value = metric?.value ?? metric?.displayValue ?? metric?.text ?? EMPTY_VALUE;
+  const unit = stringOrEmpty(metric?.unit || metric?.currency);
+  if (value === null || value === undefined || value === '') return EMPTY_VALUE;
+  if (typeof value === 'number') return [formatMetricNumber(value, 2), unit].filter(Boolean).join(' ');
+  return [String(value), unit].filter(Boolean).join(' ');
+};
+
+const SourceNote = ({ source, evidence }) => { 
+  const parts = getSourceParts(source); 
+  const proof = stringOrEmpty(evidence || source?.evidence || source?.quote); 
+  if (!parts.length && !proof) return null; 
+
+  return (
+    <div className="mt-2 rounded-lg border border-slate-800/70 bg-slate-950/45 px-3 py-2 text-xs leading-5 text-slate-400">
+      {parts.length > 0 && <p className="font-semibold text-slate-300">{parts.join(' · ')}</p>}
+      {proof && <p className="mt-1 text-slate-500">{proof}</p>}
+    </div> 
+  ); 
+}; 
+
+const SUMMARY_STANCE_LABELS = {
+  pozytywny: 'Pozytywny',
+  mieszany: 'Mieszany',
+  ostrozny: 'Ostrozny',
+  negatywny: 'Negatywny',
+};
+
+const SUMMARY_STANCE_CLASSES = {
+  pozytywny: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200',
+  mieszany: 'border-blue-500/20 bg-blue-500/10 text-blue-200',
+  ostrozny: 'border-amber-500/20 bg-amber-500/10 text-amber-200',
+  negatywny: 'border-rose-500/20 bg-rose-500/10 text-rose-200',
+};
+
+const MarkdownInline = ({ text }) => (
+  String(text || '').split(/(\*\*[^*]+\*\*)/g).map((part, index) => (
+    part.startsWith('**') && part.endsWith('**') && part.length > 4
+      ? <strong key={`${index}-${part.slice(0, 8)}`} className="font-semibold text-slate-100">{part.slice(2, -2)}</strong>
+      : <span key={`${index}-${part.slice(0, 8)}`}>{part}</span>
+  ))
+);
+
+const pushMarkdownParagraph = (blocks, lines) => {
+  if (!lines.length) return;
+  blocks.push({ type: 'paragraph', text: lines.join(' ') });
+  lines.length = 0;
+};
+
+const MarkdownSummary = ({ text }) => {
+  const blocks = [];
+  const paragraphLines = [];
+  const bulletLines = [];
+  const flushBullets = () => {
+    if (!bulletLines.length) return;
+    blocks.push({ type: 'list', items: [...bulletLines] });
+    bulletLines.length = 0;
+  };
+
+  String(text || '').split(/\r?\n/).forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      pushMarkdownParagraph(blocks, paragraphLines);
+      flushBullets();
+      return;
+    }
+    const heading = trimmed.match(/^#{1,3}\s+(.+)$/);
+    if (heading) {
+      pushMarkdownParagraph(blocks, paragraphLines);
+      flushBullets();
+      blocks.push({ type: 'heading', text: heading[1] });
+      return;
+    }
+    const bullet = trimmed.match(/^[-*]\s+(.+)$/);
+    if (bullet) {
+      pushMarkdownParagraph(blocks, paragraphLines);
+      bulletLines.push(bullet[1]);
+      return;
+    }
+    flushBullets();
+    paragraphLines.push(trimmed);
+  });
+  pushMarkdownParagraph(blocks, paragraphLines);
+  flushBullets();
+
+  if (!blocks.length) return null;
+  return (
+    <div className="space-y-3">
+      {blocks.map((block, index) => {
+        if (block.type === 'heading') {
+          return <h4 key={`${index}-${block.text}`} className="text-sm font-bold text-slate-100"><MarkdownInline text={block.text} /></h4>;
+        }
+        if (block.type === 'list') {
+          return (
+            <ul key={`${index}-list`} className="space-y-2 pl-4 text-slate-300">
+              {block.items.map((item, itemIndex) => (
+                <li key={`${itemIndex}-${item.slice(0, 16)}`} className="list-disc pl-1"><MarkdownInline text={item} /></li>
+              ))}
+            </ul>
+          );
+        }
+        return <p key={`${index}-${block.text.slice(0, 16)}`}><MarkdownInline text={block.text} /></p>;
+      })}
+    </div>
+  );
+};
+
+const StructuredSummary = ({ summary }) => {
+  const sections = Array.isArray(summary?.sections) ? summary.sections : [];
+  if (!summary?.headline || !sections.length) return null;
+  const stance = SUMMARY_STANCE_LABELS[summary.stance] ? summary.stance : 'mieszany';
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <h3 className="text-lg font-bold leading-7 text-white">{summary.headline}</h3>
+        <span className={`inline-flex shrink-0 items-center self-start rounded-full border px-3 py-1 text-xs font-bold uppercase ${SUMMARY_STANCE_CLASSES[stance]}`}>
+          {SUMMARY_STANCE_LABELS[stance]}
+        </span>
+      </div>
+      <div className="grid gap-3 lg:grid-cols-2">
+        {sections.map((section, sectionIndex) => {
+          const bullets = Array.isArray(section.bullets) ? section.bullets : [];
+          return (
+            <div key={`${sectionIndex}-${section.title}`} className="rounded-xl border border-slate-800/70 bg-slate-900/70 p-4">
+              <h4 className="text-sm font-bold text-slate-100">{section.title}</h4>
+              <ul className="mt-3 space-y-3">
+                {bullets.map((bullet, bulletIndex) => {
+                  const isObject = bullet && typeof bullet === 'object';
+                  const text = isObject ? bullet.text : String(bullet || '');
+                  const metricKeys = isObject && Array.isArray(bullet.metricKeys) ? bullet.metricKeys.filter(Boolean) : [];
+                  return (
+                    <li key={`${bulletIndex}-${text.slice(0, 16)}`} className="text-slate-300">
+                      <p><MarkdownInline text={text} /></p>
+                      {metricKeys.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {metricKeys.map((metricKey) => <Badge key={metricKey}>{metricKey}</Badge>)}
+                        </div>
+                      )}
+                      {isObject && bullet.source && <SourceNote source={bullet.source} />}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const SummaryPanel = ({ analysis }) => {
+  const structuredSummary = getStructuredSummary(analysis);
+  const summary = getAnalysisSummary(analysis);
+
+  return (
+    <div className="rounded-xl border border-slate-800/70 bg-slate-950/50 p-4">
+      <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">Podsumowanie</p>
+      {structuredSummary ? (
+        <StructuredSummary summary={structuredSummary} />
+      ) : (
+        <MarkdownSummary text={summary || 'Model nie zwrocil jeszcze podsumowania w zapisanym schemacie.'} />
+      )}
+    </div>
+  );
+};
+ 
+const VALUATION_METRIC_SPECS = [ 
   { label: 'C/Z', aliases: ['C/Z', 'P/E', 'PE', 'Cena/Zysk'], valueType: 'multiple' },
   { label: 'C/WK', aliases: ['C/WK', 'P/B', 'PB', 'Cena/Wartość księgowa'] },
   { label: 'C/WK Grahama', aliases: ['C/WK Grahama', 'Graham P/B', 'Wskaźnik Grahama'] },
@@ -829,10 +1028,44 @@ const findMetricSpec = (label, specs) => {
 const getMetricPeriodInfo = (period) => {
   const text = String(period || 'Okres niepodany');
   const normalized = normalizeText(text);
+  const isoDate = text.match(/\b((?:19|20)\d{2})[-/.](0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])\b/);
+  const plDate = text.match(/\b(0?[1-9]|[12]\d|3[01])[-/.](0?[1-9]|1[0-2])[-/.]((?:19|20)\d{2})\b/);
+  const dateParts = isoDate
+    ? { year: Number(isoDate[1]), month: Number(isoDate[2]), day: Number(isoDate[3]) }
+    : plDate
+      ? { year: Number(plDate[3]), month: Number(plDate[2]), day: Number(plDate[1]) }
+      : null;
+  const quarterEnd = dateParts && {
+    '3-31': 1,
+    '6-30': 2,
+    '9-30': 3,
+    '12-31': 4,
+  }[`${dateParts.month}-${dateParts.day}`];
+  if (quarterEnd) {
+    return {
+      key: `Q:${dateParts.year}:${quarterEnd}`,
+      label: `Q${quarterEnd} ${dateParts.year}`,
+      year: dateParts.year,
+      quarter: quarterEnd,
+      isQuarter: true,
+      isSynthetic: false,
+    };
+  }
+
   const year = Number((text.match(/(?:19|20)\d{2}/) || [])[0]) || null;
   const romanQuarter = normalized.match(/(?:^|[^a-z0-9])(i{1,3}|iv)(?:kw|kwartal)/)?.[1];
   const quarter = Number((normalized.match(/q([1-4])/) || normalized.match(/([1-4])q/) || normalized.match(/([1-4])kw/))?.[1])
     || ({ i: 1, ii: 2, iii: 3, iv: 4 }[romanQuarter] || null);
+  if (year && quarter) {
+    return {
+      key: `Q:${year}:${quarter}`,
+      label: `Q${quarter} ${year}`,
+      year,
+      quarter,
+      isQuarter: true,
+      isSynthetic: false,
+    };
+  }
 
   return {
     key: text,
@@ -1053,6 +1286,201 @@ const MetricMatrix = ({ metrics }) => (
   </div>
 );
 
+const buildReportMetricMatrix = (metrics, fallbackPrefix = 'metric') => {
+  const periods = new Map();
+  const rows = new Map();
+
+  metrics.forEach((metric, index) => {
+    const periodInfo = getMetricPeriodInfo(metric.period);
+    periods.set(periodInfo.key, periodInfo);
+    const metricKey = metric.metricKey || metric.label || `${fallbackPrefix}_${index + 1}`;
+    const definition = getReportMetricDefinition(metric.metricKey) || getReportMetricDefinition(metric.label);
+    if (!rows.has(metricKey)) {
+      rows.set(metricKey, {
+        key: metricKey,
+        label: metric.label || metric.metricKey || `Metryka ${index + 1}`,
+        description: definition?.description || '',
+        aggregation: metric.aggregation || '',
+        values: new Map(),
+      });
+    }
+    const row = rows.get(metricKey);
+    if (!row.description && definition?.description) row.description = definition.description;
+    row.values.set(periodInfo.key, metric);
+  });
+
+  return {
+    periods: [...periods.values()].sort(sortPeriods),
+    rows: [...rows.values()].sort((left, right) => left.label.localeCompare(right.label, 'pl')),
+  };
+};
+
+const ReportMetricLabel = ({ row, size = 'sm', idPrefix = 'metric' }) => {
+  const labelClass = size === 'xs' ? 'text-xs text-slate-300' : 'text-sm text-slate-200';
+  const tooltipId = `${idPrefix}-metric-tooltip-${String(row.key).replace(/[^a-z0-9_-]/gi, '-')}`;
+
+  return (
+    <div className="flex items-start gap-2">
+      <p className={`${labelClass} font-semibold leading-5`}>{row.label}</p>
+      {row.description && (
+        <span className="group relative mt-0.5 inline-flex shrink-0">
+          <button
+            type="button"
+            className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-700 bg-slate-950 text-[10px] font-bold leading-none text-slate-400 transition-colors hover:border-blue-400/60 hover:text-blue-200 focus-visible:border-blue-300 focus-visible:text-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/30"
+            aria-label={`Definicja metryki ${row.label}`}
+            aria-describedby={tooltipId}
+          >
+            i
+          </button>
+          <span
+            id={tooltipId}
+            role="tooltip"
+            className="pointer-events-none absolute left-0 top-5 z-50 hidden w-72 max-w-[min(18rem,calc(100vw-3rem))] rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-left text-xs font-normal leading-5 text-slate-300 shadow-xl shadow-slate-950/40 group-hover:block group-focus-within:block"
+          >
+            {row.description}
+          </span>
+        </span>
+      )}
+    </div>
+  );
+};
+
+const DraftMetricFactsTable = ({ metrics }) => {
+  const table = buildReportMetricMatrix(metrics, 'draft_metric');
+  if (!table.rows.length) return <EmptyState>Brak metryk w szkicu analizy.</EmptyState>;
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-slate-800/80">
+      <div className="overflow-x-auto">
+        <table className="min-w-full divide-y divide-slate-800/80 text-left text-sm">
+          <thead className="bg-slate-950/60 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <tr>
+              <th className="sticky left-0 z-10 min-w-56 bg-slate-950/95 px-3 py-3">Metryka</th>
+              {table.periods.map((period) => (
+                <th key={period.key} className="min-w-64 px-3 py-3">{period.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-800/70 bg-slate-900">
+            {table.rows.map((row) => (
+              <tr key={row.key}>
+                <th className="sticky left-0 z-10 bg-slate-900 px-3 py-3 align-top">
+                  <ReportMetricLabel row={row} idPrefix="draft" />
+                  <p className="mt-1 font-mono text-[11px] text-slate-500">{row.key}</p>
+                  {row.aggregation && <Badge className="mt-2">{row.aggregation}</Badge>}
+                </th>
+                {table.periods.map((period) => {
+                  const metric = row.values.get(period.key);
+                  const source = getFactSource(metric);
+                  return (
+                    <td key={`${row.key}-${period.key}`} className="px-3 py-3 align-top text-slate-200">
+                      {metric ? (
+                        <div>
+                          <p className="font-mono text-sm font-semibold">{formatAnalysisMetricValue(metric)}</p>
+                          {Number.isFinite(Number(metric.confidence)) && <Badge className="mt-2">pewność {formatNumber(Number(metric.confidence) * 100, 0)}%</Badge>}
+                          <SourceNote source={source} evidence={source.evidence} />
+                        </div>
+                      ) : (
+                        <span className="text-slate-600">{EMPTY_VALUE}</span>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+const ApprovedReportMetricMatrix = ({ metrics }) => {
+  const table = buildReportMetricMatrix(metrics || [], 'approved_metric');
+
+  return (
+    <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
+      <SectionHeading
+        title="Zatwierdzone metryki raportowe"
+        description="Trwała macierz metryk zapisana dopiero po akceptacji analizy. Każda komórka zachowuje źródło z dokumentu."
+      />
+      {table.rows.length ? (
+        <div className="overflow-hidden rounded-xl border border-slate-800/80">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-slate-800/80 text-left text-sm">
+              <thead className="bg-slate-950/60 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="sticky left-0 z-10 min-w-56 bg-slate-950/95 px-3 py-3">Metryka</th>
+                  {table.periods.map((period) => (
+                    <th key={period.key} className="min-w-64 px-3 py-3">{period.label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/70 bg-slate-900">
+                {table.rows.map((row) => (
+                  <tr key={row.key}>
+                    <th className="sticky left-0 z-10 bg-slate-900 px-3 py-3 align-top">
+                      <ReportMetricLabel row={row} size="xs" idPrefix="approved" />
+                      <p className="mt-1 font-mono text-[11px] text-slate-500">{row.key}</p>
+                      {row.aggregation && <Badge className="mt-2">{row.aggregation}</Badge>}
+                    </th>
+                    {table.periods.map((period) => {
+                      const metric = row.values.get(period.key);
+                      return (
+                        <td key={`${row.key}-${period.key}`} className="px-3 py-3 align-top text-slate-200">
+                          {metric ? (
+                            <div>
+                              <p className="font-mono text-sm font-semibold">{formatAnalysisMetricValue(metric)}</p>
+                              <SourceNote source={metric.source || metric} evidence={metric.quote || metric.source?.evidence} />
+                            </div>
+                          ) : (
+                            <span className="text-slate-600">{EMPTY_VALUE}</span>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : <EmptyState>Brak zatwierdzonych metryk. Zaakceptuj szkic analizy, aby zapisać fakty raportowe w tabeli.</EmptyState>}
+    </section>
+  );
+};
+
+const SourceBackedList = ({ title, tone = 'default', items }) => {
+  if (!items.length) return null;
+  const titleClass = tone === 'risk' ? 'text-rose-300' : tone === 'warning' ? 'text-amber-300' : 'text-slate-500';
+  const itemClass = tone === 'risk'
+    ? 'border-rose-500/15 bg-rose-500/5'
+    : tone === 'warning'
+      ? 'border-amber-500/15 bg-amber-500/5'
+      : 'border-slate-800/70 bg-slate-950/40';
+
+  return (
+    <div>
+      <p className={`mb-2 text-xs font-bold uppercase tracking-wide ${titleClass}`}>{title}</p>
+      <ul className="space-y-2">
+        {items.map((item, index) => {
+          const isObject = item && typeof item === 'object';
+          const text = isObject ? item.text || item.reason || item.value || JSON.stringify(item) : String(item);
+          const source = isObject ? item.source || {} : {};
+          const evidence = isObject ? item.evidence || item.source?.evidence : '';
+          return (
+            <li key={`${index}-${text.slice(0, 16)}`} className={`rounded-lg border px-3 py-2 text-slate-300 ${itemClass}`}>
+              <p>{text}</p>
+              {isObject && item.metricKey && <p className="mt-1 font-mono text-[11px] text-slate-500">{item.metricKey}</p>}
+              <SourceNote source={source} evidence={evidence} />
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+};
+
 const AnalysisPreview = ({ analysis, helperOnline, busy, onApprove }) => {
   if (!analysis) {
     return (
@@ -1065,15 +1493,19 @@ const AnalysisPreview = ({ analysis, helperOnline, busy, onApprove }) => {
 
   const analysisId = getItemId(analysis);
   const isDraft = String(analysis.status || '').toLowerCase() === 'draft';
+  const content = getAnalysisContent(analysis);
+  const metricFacts = Array.isArray(content.metricFacts) ? content.metricFacts : [];
   const insights = getAnalysisItems(analysis, ['conclusions', 'keyTakeaways', 'insights', 'findings']);
   const risks = getAnalysisItems(analysis, ['risks', 'riskFactors']);
   const metrics = getAnalysisItems(analysis, ['metrics', 'keyMetrics']);
+  const extractionWarnings = getAnalysisItems(analysis, ['extractionWarnings']);
   const citations = getAnalysisItems(analysis, ['sources', 'citations', 'evidence']);
+  const hasV2MetricFacts = metricFacts.length > 0;
 
   return (
     <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
       <SectionHeading
-        title={isDraft ? 'Podgląd szkicu analizy' : 'Najnowsza zatwierdzona analiza'}
+        title={isDraft ? 'Podgląd szkicu analizy' : 'Podgląd analizy'}
         description={`Schemat ${analysis.schemaVersion || analysis.version || 'v1'} · ${analysis.model || analysis.provider || 'lokalna analiza'} · ${formatDate(analysis.createdAt || analysis.updatedAt, { withTime: true })}`}
         action={isDraft && (
           <PrimaryButton disabled={!helperOnline || busy || !analysisId} onClick={() => onApprove(analysisId)}>
@@ -1087,27 +1519,14 @@ const AnalysisPreview = ({ analysis, helperOnline, busy, onApprove }) => {
         {analysis.documentIds?.length && <Badge>Dokumenty: {analysis.documentIds.length}</Badge>}
       </div>
       <div className="space-y-5 text-sm leading-6 text-slate-300">
-        <div className="rounded-xl border border-slate-800/70 bg-slate-950/50 p-4">
-          <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Podsumowanie</p>
-          <p>{getAnalysisSummary(analysis) || 'Model nie zwrócił jeszcze podsumowania w zapisanym schemacie.'}</p>
+        <SummaryPanel analysis={analysis} />
+        <SourceBackedList title="Wnioski" items={insights} />
+        <div>
+          <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Metryki</p>
+          {hasV2MetricFacts ? <DraftMetricFactsTable metrics={metricFacts} /> : <MetricMatrix metrics={metrics} />}
         </div>
-        {insights.length > 0 && (
-          <div>
-            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Wnioski</p>
-            <ul className="space-y-2">
-              {insights.map((item, index) => <li key={`${index}-${String(item).slice(0, 16)}`} className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">{typeof item === 'string' ? item : item.text || item.value || JSON.stringify(item)}</li>)}
-            </ul>
-          </div>
-        )}
-        <MetricMatrix metrics={metrics} />
-        {risks.length > 0 && (
-          <div>
-            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-rose-300">Ryzyka</p>
-            <ul className="space-y-2">
-              {risks.map((item, index) => <li key={`${index}-${String(item).slice(0, 16)}`} className="rounded-lg border border-rose-500/15 bg-rose-500/5 px-3 py-2 text-slate-300">{typeof item === 'string' ? item : item.text || item.value || JSON.stringify(item)}</li>)}
-            </ul>
-          </div>
-        )}
+        <SourceBackedList title="Ryzyka" tone="risk" items={risks} />
+        <SourceBackedList title="Ostrzeżenia ekstrakcji" tone="warning" items={extractionWarnings} />
         {citations.length > 0 && (
           <div>
             <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Dowody i źródła</p>
@@ -1125,24 +1544,245 @@ const AnalysisPreview = ({ analysis, helperOnline, busy, onApprove }) => {
   );
 };
 
-const AnalysisHistory = ({ analyses }) => (
+const getAnalysisTitle = (analysis) => (
+  analysis?.title || `Analiza ${formatDate(analysis?.createdAt || analysis?.updatedAt)}`
+);
+
+const AnalysisManageModal = ({ dialog, busy, onClose, onConfirm }) => {
+  const analysis = dialog?.analysis;
+  const mode = dialog?.mode;
+  const currentTitle = getAnalysisTitle(analysis);
+  const [title, setTitle] = useState(currentTitle);
+
+  if (!analysis || !mode) return null;
+
+  const isRename = mode === 'rename';
+  const canSubmit = !busy && (!isRename || title.trim());
+
+  return createPortal(
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+      <div className="max-h-[calc(100vh-3rem)] w-full max-w-lg overflow-y-auto rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-2xl shadow-slate-950/70">
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{isRename ? 'Edycja analizy' : 'Usuwanie analizy'}</p>
+            <h3 className="mt-1 text-lg font-bold text-white">{isRename ? 'Zmień nazwę' : 'Usuń analizę'}</h3>
+          </div>
+          <ActionButton disabled={busy} className="border border-slate-700/70 bg-slate-800/60 px-2.5 py-1.5 text-slate-300 hover:bg-slate-800" onClick={onClose}>
+            Zamknij
+          </ActionButton>
+        </div>
+
+        {isRename ? (
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Nazwa</span>
+            <input
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              disabled={busy}
+              className="mt-2 w-full rounded-xl border border-slate-700/80 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition-colors focus:border-blue-400"
+              autoFocus
+            />
+          </label>
+        ) : (
+          <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-4 text-sm leading-6 text-rose-100">
+            <p>Usunąć analizę <span className="font-semibold text-white">{currentTitle}</span>?</p>
+            <p className="mt-2 text-rose-100/75">Jeśli analiza była zatwierdzona, powiązane zatwierdzone metryki raportowe też zostaną usunięte.</p>
+          </div>
+        )}
+
+        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <SecondaryButton disabled={busy} onClick={onClose}>Anuluj</SecondaryButton>
+          <ActionButton
+            disabled={!canSubmit}
+            className={isRename ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-rose-600 text-white hover:bg-rose-500'}
+            onClick={() => onConfirm({ title: title.trim() })}
+          >
+            {isRename ? 'Zapisz nazwę' : 'Usuń analizę'}
+          </ActionButton>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+};
+
+const SettingsIcon = () => (
+  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z" />
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06A2 2 0 1 1 7.04 4.3l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.31.45.99 1.51 1H21a2 2 0 0 1 0 4h-.09A1.65 1.65 0 0 0 19.4 15Z" />
+  </svg>
+);
+
+const AnalysisHistory = ({ analyses, activeAnalysisId, helperOnline, busy, onSelect, onRenameRequest, onDeleteRequest }) => (
   <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
-    <SectionHeading title="Historia analiz" description="Zatwierdzone wersje pozostają przypisane do dokumentów wejściowych." />
+    <SectionHeading title="Historia analiz" description="Wybierz wersję do podglądu albo zarządzaj nazwą i usuwaniem." />
     {analyses?.length ? (
       <div className="space-y-2">
-        {analyses.map((analysis, index) => (
-          <div key={getItemId(analysis) || index} className="flex flex-col gap-2 rounded-xl border border-slate-800/70 bg-slate-950/45 p-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-sm font-semibold text-slate-200">{analysis.title || `Analiza ${formatDate(analysis.createdAt || analysis.updatedAt)}`}</p>
-              <p className="mt-1 text-xs text-slate-500">{analysis.model || analysis.provider || 'model niepodany'} · {analysis.schemaVersion || analysis.version || 'v1'} · {analysis.costUsd === undefined ? 'koszt niepodany' : formatUsd(analysis.costUsd)}</p>
+        {analyses.map((analysis, index) => {
+          const analysisId = getItemId(analysis);
+          const isActive = analysisId && analysisId === activeAnalysisId;
+          return (
+            <div key={analysisId || index} className={`flex flex-col gap-2 rounded-xl border p-3 sm:flex-row sm:items-center sm:justify-between ${isActive ? 'border-blue-500/35 bg-blue-500/10' : 'border-slate-800/70 bg-slate-950/45'}`}>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-semibold text-slate-200">{analysis.title || `Analiza ${formatDate(analysis.createdAt || analysis.updatedAt)}`}</p>
+                  {isActive && <Badge status="online">podgląd</Badge>}
+                </div>
+                <p className="mt-1 text-xs text-slate-500">{analysis.model || analysis.provider || 'model niepodany'} · {analysis.schemaVersion || analysis.version || 'v1'} · {analysis.costUsd === undefined ? 'koszt niepodany' : formatUsd(analysis.costUsd)}</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge status={analysis.status}>{getStatusLabel(analysis.status)}</Badge>
+                <SecondaryButton
+                  disabled={!analysisId}
+                  className="px-2.5 py-1.5"
+                  onClick={() => onSelect(analysisId)}
+                >
+                  Podgląd
+                </SecondaryButton>
+                <SecondaryButton
+                  disabled={!helperOnline || busy || !analysisId}
+                  className="px-2.5 py-1.5"
+                  onClick={() => onRenameRequest(analysis)}
+                >
+                  Zmień nazwę
+                </SecondaryButton>
+                <ActionButton
+                  disabled={!helperOnline || busy || !analysisId}
+                  className="border border-rose-500/20 bg-rose-500/10 px-2.5 py-1.5 text-rose-200 hover:bg-rose-500/15"
+                  onClick={() => onDeleteRequest(analysis)}
+                >
+                  Usuń
+                </ActionButton>
+              </div>
             </div>
-            <Badge status={analysis.status}>{getStatusLabel(analysis.status)}</Badge>
-          </div>
-        ))}
+          );
+        })}
       </div>
     ) : <EmptyState>Historia będzie widoczna po zatwierdzeniu pierwszego szkicu.</EmptyState>}
   </section>
 );
+
+const AnalysisSettingsModal = ({
+  open,
+  profile,
+  selectedDocumentIds,
+  helperOnline,
+  loading,
+  busy,
+  budget,
+  sources,
+  candidates,
+  documents,
+  analyses,
+  activeAnalysisId,
+  onClose,
+  onRefresh,
+  onRunAnalysis,
+  onAddSource,
+  onDeleteSource,
+  onDiscover,
+  onApproveCandidate,
+  onToggleDocument,
+  onImportDocument,
+  onDeleteDocument,
+  getDownloadUrl,
+  onBudgetUpdate,
+  onExport,
+  onImport,
+  onSelectAnalysis,
+  onRenameAnalysis,
+  onDeleteAnalysis,
+}) => {
+  if (!open) return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[65] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+      <div className="flex max-h-[calc(100vh-3rem)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-slate-800 bg-slate-950 shadow-2xl shadow-slate-950/70">
+        <div className="flex flex-col gap-3 border-b border-slate-800/80 bg-slate-900 px-5 py-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-blue-300">Konfiguracja analizy</p>
+            <h3 className="mt-1 text-lg font-bold text-white">{profile?.name || 'Instrument'}</h3>
+            <p className="mt-1 text-xs leading-5 text-slate-500">Dokumenty, źródła, historia, budżet i backup w jednym miejscu.</p>
+          </div>
+          <ActionButton className="self-start border border-slate-700/70 bg-slate-800/60 px-3 py-2 text-slate-200 hover:bg-slate-800" onClick={onClose}>
+            Zamknij
+          </ActionButton>
+        </div>
+        <div className="overflow-y-auto p-5">
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <div className="space-y-5">
+              <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
+                <SectionHeading
+                  title="Konfiguracja analizy"
+                  description="Wybierz dokumenty, odśwież dane albo uruchom analizę dla zaznaczonych materiałów."
+                />
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <SecondaryButton disabled={!helperOnline || busy || loading} onClick={onRefresh}>Odśwież dane</SecondaryButton>
+                  <PrimaryButton
+                    disabled={!helperOnline || busy || selectedDocumentIds.length === 0}
+                    onClick={onRunAnalysis}
+                    title={selectedDocumentIds.length === 0 ? 'Zaznacz co najmniej jeden zarchiwizowany dokument.' : undefined}
+                  >
+                    Analizuj {selectedDocumentIds.length ? `(${selectedDocumentIds.length})` : ''}
+                  </PrimaryButton>
+                </div>
+                <p className="mt-3 text-xs leading-5 text-slate-500">
+                  Zaznaczone dokumenty: {selectedDocumentIds.length}. Analiza korzysta z lokalnego archiwum i zapisanych źródeł.
+                </p>
+              </section>
+              <DocumentList
+                documents={documents}
+                selectedIds={selectedDocumentIds}
+                helperOnline={helperOnline}
+                busy={busy}
+                onToggle={onToggleDocument}
+                onImport={onImportDocument}
+                onDelete={onDeleteDocument}
+                getDownloadUrl={getDownloadUrl}
+              />
+              <AnalysisHistory
+                analyses={analyses}
+                activeAnalysisId={activeAnalysisId}
+                helperOnline={helperOnline}
+                busy={busy}
+                onSelect={onSelectAnalysis}
+                onRenameRequest={onRenameAnalysis}
+                onDeleteRequest={onDeleteAnalysis}
+              />
+            </div>
+            <div className="space-y-5">
+              <SourceList
+                sources={sources}
+                helperOnline={helperOnline}
+                busy={busy}
+                onAdd={onAddSource}
+                onDelete={onDeleteSource}
+              />
+              <CandidateList
+                candidates={candidates}
+                helperOnline={helperOnline}
+                busy={busy}
+                onDiscover={onDiscover}
+                onApprove={onApproveCandidate}
+              />
+              <BudgetPanel
+                key={`settings-budget-${budget?.monthlyLimitUsd ?? budget?.limitUsd ?? 10}`}
+                budget={budget}
+                helperOnline={helperOnline}
+                onUpdate={onBudgetUpdate}
+                onExport={onExport}
+                onImport={onImport}
+                busy={busy}
+                compact
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+};
 
 const SecondOpinion = ({ profile }) => (
   <details className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
@@ -1167,24 +1807,31 @@ const getProfileParts = (response, fallback) => {
     documents: pickArray('documents'),
     candidates: pickArray('candidates'),
     analyses: pickArray('analyses'),
+    reportMetrics: pickArray('reportMetrics'),
   };
 };
 
-const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperError, budget, onRefreshOverview, onBudgetUpdate, busy, setBusy, setNotice }) => {
+const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperError, budget, onRefreshOverview, onBudgetUpdate, onExport, onImport, busy, setBusy, setNotice }) => {
   const [detail, setDetail] = useState(() => getProfileParts(null, fallbackProfile));
   const [loading, setLoading] = useState(false);
   const [operationMessage, setOperationMessage] = useState('');
   const [detailError, setDetailError] = useState('');
   const [selectedDocumentIds, setSelectedDocumentIds] = useState([]);
+  const [analysisDialog, setAnalysisDialog] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [selectedAnalysisId, setSelectedAnalysisId] = useState('');
 
   const helperOnline = helperStatus === 'online';
   const profile = detail.profile || fallbackProfile;
   const sources = detail.sources.length ? detail.sources : profile.sources || [];
-  const activeAnalysis = detail.analyses.find((analysis) => String(analysis.status || '').toLowerCase() === 'draft')
+  const defaultAnalysis = detail.analyses.find((analysis) => String(analysis.status || '').toLowerCase() === 'draft')
     || detail.analyses.find((analysis) => String(analysis.status || '').toLowerCase() === 'approved')
     || detail.analyses[0]
     || profile.latestAnalysis
     || null;
+  const activeAnalysis = detail.analyses.find((analysis) => getItemId(analysis) === selectedAnalysisId)
+    || defaultAnalysis;
+  const activeAnalysisId = getItemId(activeAnalysis);
 
   const refreshDetail = useCallback(async () => {
     if (!helperOnline) return;
@@ -1302,6 +1949,27 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
     'Zatwierdzam szkic i zapisuję go w historii...',
   );
 
+  const renameAnalysis = (analysisId, title) => perform(
+    () => analysisApi.updateAnalysisTitle(analysisId, title),
+    'Nazwa analizy została zmieniona.',
+    'Zapisuję nową nazwę analizy...',
+  );
+
+  const deleteAnalysis = (analysisId) => perform(
+    () => analysisApi.deleteAnalysis(analysisId),
+    'Analiza została usunięta.',
+    'Usuwam analizę z lokalnej historii...',
+  );
+
+  const confirmAnalysisDialog = async ({ title } = {}) => {
+    if (!analysisDialog?.analysis) return;
+    const analysisId = getItemId(analysisDialog.analysis);
+    const result = analysisDialog.mode === 'rename'
+      ? await renameAnalysis(analysisId, title)
+      : await deleteAnalysis(analysisId);
+    if (result) setAnalysisDialog(null);
+  };
+
   const toggleDocument = (documentId) => {
     setSelectedDocumentIds((current) => (
       current.includes(documentId)
@@ -1326,10 +1994,60 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
             <h1 className="text-3xl font-bold text-white">{profile.name}</h1>
             <p className="mt-2 font-mono text-sm text-slate-500">{identifier || assetId}</p>
           </div>
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-700/70 bg-slate-900 text-slate-300 shadow-lg shadow-slate-950/30 transition-colors hover:border-blue-400/50 hover:bg-slate-800 hover:text-blue-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/35"
+            aria-label="Otwórz konfigurację analizy"
+            title="Konfiguracja analizy"
+          >
+            <SettingsIcon />
+          </button>
         </div>
       </div>
 
       <HelperBanner status={helperStatus} error={helperError || detailError} onRetry={onRefreshOverview} />
+      <AnalysisManageModal
+        key={`${analysisDialog?.mode || 'none'}-${getItemId(analysisDialog?.analysis) || 'none'}`}
+        dialog={analysisDialog}
+        busy={busy}
+        onClose={() => setAnalysisDialog(null)}
+        onConfirm={confirmAnalysisDialog}
+      />
+      <AnalysisSettingsModal
+        open={settingsOpen}
+        profile={profile}
+        selectedDocumentIds={selectedDocumentIds}
+        helperOnline={helperOnline}
+        loading={loading}
+        busy={busy}
+        budget={budget}
+        sources={sources}
+        candidates={detail.candidates}
+        documents={detail.documents}
+        analyses={detail.analyses}
+        activeAnalysisId={activeAnalysisId}
+        onClose={() => setSettingsOpen(false)}
+        onRefresh={refreshDetail}
+        onRunAnalysis={runAnalysis}
+        onAddSource={addSource}
+        onDeleteSource={deleteSource}
+        onDiscover={discover}
+        onApproveCandidate={approveCandidate}
+        onToggleDocument={toggleDocument}
+        onImportDocument={importDocument}
+        onDeleteDocument={deleteDocument}
+        getDownloadUrl={analysisApi.getDocumentDownloadUrl}
+        onBudgetUpdate={onBudgetUpdate}
+        onExport={onExport}
+        onImport={onImport}
+        onSelectAnalysis={(analysisId) => {
+          setSelectedAnalysisId(analysisId);
+          setSettingsOpen(false);
+        }}
+        onRenameAnalysis={(analysis) => setAnalysisDialog({ mode: 'rename', analysis })}
+        onDeleteAnalysis={(analysis) => setAnalysisDialog({ mode: 'delete', analysis })}
+      />
 
       {(loading || operationMessage) && (
         <div className="mb-6">
@@ -1343,75 +2061,17 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
         </div>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="space-y-6">
-          <AnalysisPreview analysis={activeAnalysis} helperOnline={helperOnline} busy={busy} onApprove={approveAnalysis} />
-          <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
-            <SectionHeading
-              title="Bieżąca pozycja"
-              description="Wycena pochodzi wyłącznie z zaimportowanych danych portfela; nie jest pobierana przez Perplexity."
-            />
-            <PositionSummary positions={profile.positions || fallbackProfile.positions} />
-          </section>
-          <AnalysisHistory analyses={detail.analyses} />
-          <SecondOpinion profile={profile} />
-        </div>
-        <div className="space-y-4 xl:sticky xl:top-6 xl:self-start">
-          <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-4 shadow-xl">
-            <SectionHeading
-              title="Konfiguracja analizy"
-              description="Wybierz dokumenty, odśwież dane albo uruchom analizę dla zaznaczonych materiałów."
-            />
-            <div className="grid gap-2">
-              <SecondaryButton disabled={!helperOnline || busy || loading} onClick={refreshDetail}>Odśwież dane</SecondaryButton>
-              <PrimaryButton
-                disabled={!helperOnline || busy || selectedDocumentIds.length === 0}
-                onClick={runAnalysis}
-                title={selectedDocumentIds.length === 0 ? 'Zaznacz co najmniej jeden zarchiwizowany dokument.' : undefined}
-              >
-                Analizuj {selectedDocumentIds.length ? `(${selectedDocumentIds.length})` : ''}
-              </PrimaryButton>
-              <p className="text-xs leading-5 text-slate-500">
-                Zaznaczone dokumenty: {selectedDocumentIds.length}. Analiza korzysta z lokalnego archiwum i zapisanych źródeł.
-              </p>
-            </div>
-          </section>
-          <SourceList
-            sources={sources}
-            helperOnline={helperOnline}
-            busy={busy}
-            onAdd={addSource}
-            onDelete={deleteSource}
+      <div className="space-y-6">
+        <AnalysisPreview analysis={activeAnalysis} helperOnline={helperOnline} busy={busy} onApprove={approveAnalysis} />
+        <ApprovedReportMetricMatrix metrics={detail.reportMetrics} />
+        <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
+          <SectionHeading
+            title="Bieżąca pozycja"
+            description="Wycena pochodzi wyłącznie z zaimportowanych danych portfela; nie jest pobierana przez Perplexity."
           />
-          <CandidateList
-            candidates={detail.candidates}
-            helperOnline={helperOnline}
-            busy={busy}
-            onDiscover={discover}
-            onApprove={approveCandidate}
-          />
-          <DocumentList
-            documents={detail.documents}
-            selectedIds={selectedDocumentIds}
-            helperOnline={helperOnline}
-            busy={busy}
-            onToggle={toggleDocument}
-            onImport={importDocument}
-            onDelete={deleteDocument}
-            getDownloadUrl={analysisApi.getDocumentDownloadUrl}
-            compact
-          />
-          <BudgetPanel
-            key={`budget-${budget?.monthlyLimitUsd ?? budget?.limitUsd ?? 10}`}
-            budget={budget}
-            helperOnline={helperOnline}
-            onUpdate={onBudgetUpdate}
-            onExport={() => setNotice({ type: 'info', text: 'Pełny backup jest dostępny z listy wszystkich aktywów.' })}
-            onImport={() => setNotice({ type: 'info', text: 'Import backupu jest dostępny z listy wszystkich aktywów.' })}
-            busy={busy}
-            compact
-          />
-        </div>
+          <PositionSummary positions={profile.positions || fallbackProfile.positions} />
+        </section>
+        <SecondOpinion profile={profile} />
       </div>
     </div>
   );
@@ -1565,6 +2225,8 @@ const Analysis = () => {
           budget={budget}
           onRefreshOverview={refreshOverview}
           onBudgetUpdate={updateBudget}
+          onExport={exportBackup}
+          onImport={importBackup}
           busy={busy}
           setBusy={setBusy}
           setNotice={setNotice}

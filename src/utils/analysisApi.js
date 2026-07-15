@@ -145,10 +145,19 @@ export const analysisApi = {
     await apiRequest(`/profiles/${encodeURIComponent(assetId)}/analyses`),
     'analyses',
   ),
+  listReportMetrics: async (assetId) => asArray(
+    await apiRequest(`/profiles/${encodeURIComponent(assetId)}/report-metrics`),
+    'metrics',
+  ),
   runAnalysis: (assetId, options) => jsonRequest(`/profiles/${encodeURIComponent(assetId)}/analyses`, {
     body: options,
   }),
   approveAnalysis: (analysisId) => jsonRequest(`/analyses/${encodeURIComponent(analysisId)}/approve`, { body: {} }),
+  updateAnalysisTitle: (analysisId, title) => jsonRequest(`/analyses/${encodeURIComponent(analysisId)}`, {
+    method: 'PATCH',
+    body: { title },
+  }),
+  deleteAnalysis: (analysisId) => apiRequest(`/analyses/${encodeURIComponent(analysisId)}`, { method: 'DELETE' }),
 
   getBudget: () => apiRequest('/budget'),
   updateBudget: (monthlyLimitUsd) => jsonRequest('/budget', {

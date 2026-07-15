@@ -291,6 +291,13 @@ const handleRoute = async ({ request, response, store, apiKey, fetchImpl }) => {
       }
     }
 
+    if (parts[2] === 'report-metrics') {
+      if (parts.length === 3 && method === 'GET') {
+        sendData(response, { metrics: store.listApprovedReportMetrics(assetId) });
+        return;
+      }
+    }
+
     if (parts[2] === 'analyses') {
       if (parts.length === 3 && method === 'GET') {
         sendData(response, { analyses: store.listAnalyses(assetId) });
@@ -358,6 +365,15 @@ const handleRoute = async ({ request, response, store, apiKey, fetchImpl }) => {
   if (parts[0] === 'analyses' && parts.length === 3 && parts[2] === 'approve' && method === 'POST') {
     await readJsonBody(request);
     sendData(response, { analysis: store.approveAnalysis(parts[1]) });
+    return;
+  }
+  if (parts[0] === 'analyses' && parts.length === 2 && method === 'PATCH') {
+    const body = await readJsonBody(request);
+    sendData(response, { analysis: store.updateAnalysisTitle(parts[1], body.title) });
+    return;
+  }
+  if (parts[0] === 'analyses' && parts.length === 2 && method === 'DELETE') {
+    sendData(response, store.deleteAnalysis(parts[1]));
     return;
   }
 

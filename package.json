@@ -4,10 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node server/dev.mjs",
+    "dev": "node --use-system-ca server/dev.mjs",
     "dev:vite": "vite",
-    "helper": "node server/index.js",
-    "dev:all": "node server/dev.mjs",
+    "helper": "node --use-system-ca server/index.js",
+    "dev:all": "node --use-system-ca server/dev.mjs",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",

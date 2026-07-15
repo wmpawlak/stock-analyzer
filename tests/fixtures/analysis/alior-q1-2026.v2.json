@@ -1,0 +1,223 @@
+{
+  "schemaVersion": "2.0",
+  "assetId": "instrument:ALR_3AWSE",
+  "assetName": "Alior Bank",
+  "title": "Alior Bank - docelowy JSON analizy raportu Q1 2026",
+  "reportPeriod": "Q1 2026",
+  "document": {
+    "documentId": "doc_e4d70f01-3278-47d1-8add-8a4ff75fec2e",
+    "title": "Raport Grupy Kapitalowej Alior Banku S.A. za I kwartal 2026 r.",
+    "filename": "Raport Grupy Kapitałowej Alior Banku S.A. za I kwartał 2026 r..pdf"
+  },
+  "summary": "Alior Bank w Q1 2026 utrzymal dodatni wynik netto i zwiekszyl skale bilansu, ale rentownosc ROE/ROA spadla rok do roku. Kluczowe obciazenia to wyzszy CIT, koszty ryzyka prawnego kredytow walutowych oraz ujemne przeplywy pieniezne netto w kwartale. To jest fixture warsztatowy: wartosci pochodza z dotychczasowego szkicu w lokalnej bazie, a pola page pozostaja null do czasu pelnej ekstrakcji stron z PDF.",
+  "metricFacts": [
+    {
+      "metricKey": "net_income",
+      "label": "Zysk netto",
+      "value": 403186,
+      "unit": "tys. PLN",
+      "period": "Q1 2026",
+      "page": null,
+      "section": "Skonsolidowany rachunek zyskow i strat za okres 01.01.2026-31.03.2026",
+      "quote": "Zysk netto 403 186 tys. PLN w okresie 01.01.2026-31.03.2026",
+      "confidence": 0.95
+    },
+    {
+      "metricKey": "total_assets",
+      "label": "Aktywa ogolem",
+      "value": 104718199,
+      "unit": "tys. PLN",
+      "period": "2026-03-31",
+      "page": null,
+      "section": "Skonsolidowane sprawozdanie z sytuacji finansowej",
+      "quote": "Aktywa razem 104 718 199 tys. PLN na 31.03.2026",
+      "confidence": 0.95
+    },
+    {
+      "metricKey": "total_liabilities",
+      "label": "Zobowiazania ogolem",
+      "value": 91585483,
+      "unit": "tys. PLN",
+      "period": "2026-03-31",
+      "page": null,
+      "section": "Skonsolidowane sprawozdanie z sytuacji finansowej",
+      "quote": "Zobowiazania razem 91 585 483 tys. PLN na 31.03.2026",
+      "confidence": 0.95
+    },
+    {
+      "metricKey": "equity",
+      "label": "Kapital wlasny",
+      "value": 13132716,
+      "unit": "tys. PLN",
+      "period": "2026-03-31",
+      "page": null,
+      "section": "Skonsolidowane sprawozdanie z sytuacji finansowej",
+      "quote": "Kapital wlasny 13 132 716 tys. PLN na 31.03.2026",
+      "confidence": 0.95
+    },
+    {
+      "metricKey": "cash_flow_total",
+      "label": "Przeplywy pieniezne razem",
+      "value": -2492438,
+      "unit": "tys. PLN",
+      "period": "Q1 2026",
+      "page": null,
+      "section": "Skonsolidowane sprawozdanie z przeplywow pienieznych za okres 01.01.2026-31.03.2026",
+      "quote": "Przeplywy pieniezne netto razem -2 492 438 tys. PLN",
+      "confidence": 0.95
+    },
+    {
+      "metricKey": "roe",
+      "label": "ROE",
+      "value": 12.5,
+      "unit": "%",
+      "period": "2026-03-31",
+      "page": null,
+      "section": "Wybrane wskazniki finansowe",
+      "quote": "ROE 12,5% na 31.03.2026",
+      "confidence": 0.9
+    },
+    {
+      "metricKey": "roa",
+      "label": "ROA",
+      "value": 1.6,
+      "unit": "%",
+      "period": "2026-03-31",
+      "page": null,
+      "section": "Wybrane wskazniki finansowe",
+      "quote": "ROA 1,6% na 31.03.2026",
+      "confidence": 0.9
+    },
+    {
+      "metricKey": "net_interest_income",
+      "label": "Wynik odsetkowy",
+      "value": 1248230,
+      "unit": "tys. PLN",
+      "period": "Q1 2026",
+      "page": null,
+      "section": "Skonsolidowany rachunek zyskow i strat",
+      "quote": "Wynik z tytulu odsetek 1 248 230 tys. PLN",
+      "confidence": 0.9
+    },
+    {
+      "metricKey": "net_fee_commission_income",
+      "label": "Wynik prowizyjny",
+      "value": 221151,
+      "unit": "tys. PLN",
+      "period": "Q1 2026",
+      "page": null,
+      "section": "Skonsolidowany rachunek zyskow i strat",
+      "quote": "Wynik z tytulu prowizji i oplat 221 151 tys. PLN",
+      "confidence": 0.9
+    },
+    {
+      "metricKey": "cost_of_risk",
+      "label": "Koszt ryzyka",
+      "value": -115273,
+      "unit": "tys. PLN",
+      "period": "Q1 2026",
+      "page": null,
+      "section": "Skonsolidowany rachunek zyskow i strat",
+      "quote": "Wynik z tytulu oczekiwanych strat kredytowych -115 273 tys. PLN",
+      "confidence": 0.82
+    },
+    {
+      "metricKey": "cet1",
+      "label": "CET1",
+      "value": 17.85,
+      "unit": "%",
+      "period": "2026-03-31",
+      "page": null,
+      "section": "Wybrane wskazniki finansowe / Zarzadzanie kapitalem",
+      "quote": "Wspolczynnik Tier 1 17,85% na 31.03.2026",
+      "confidence": 0.85
+    },
+    {
+      "metricKey": "tcr",
+      "label": "TCR",
+      "value": 17.85,
+      "unit": "%",
+      "period": "2026-03-31",
+      "page": null,
+      "section": "Wybrane wskazniki finansowe / Zarzadzanie kapitalem",
+      "quote": "Wspolczynnik wyplacalnosci 17,85% na 31.03.2026",
+      "confidence": 0.85
+    },
+    {
+      "metricKey": "customer_deposits",
+      "label": "Depozyty klientow",
+      "value": 85413751,
+      "unit": "tys. PLN",
+      "period": "2026-03-31",
+      "page": null,
+      "section": "Skonsolidowane sprawozdanie z sytuacji finansowej",
+      "quote": "Zobowiazania wobec klientow 85 413 751 tys. PLN na 31.03.2026",
+      "confidence": 0.95
+    },
+    {
+      "metricKey": "customer_loans",
+      "label": "Kredyty klientow",
+      "value": 68937200,
+      "unit": "tys. PLN",
+      "period": "2026-03-31",
+      "page": null,
+      "section": "Skonsolidowane sprawozdanie z sytuacji finansowej",
+      "quote": "Naleznosci od klientow 68 937 200 tys. PLN na 31.03.2026",
+      "confidence": 0.95
+    }
+  ],
+  "risks": [
+    {
+      "text": "Wyższa stawka CIT dla bankow od 2026 r. obniza zysk netto mimo stabilnego zysku brutto.",
+      "source": {
+        "documentId": "doc_e4d70f01-3278-47d1-8add-8a4ff75fec2e",
+        "page": null,
+        "section": "Nota 14 i opis zmian w otoczeniu podatkowym",
+        "evidence": "Podatek dochodowy w Q1 2026 wyniosl 237 538 tys. PLN wobec 165 913 tys. PLN rok wczesniej; stawka CIT dla bankow wzrosla z 19% do 30%."
+      }
+    },
+    {
+      "text": "Koszty ryzyka prawnego kredytow hipotecznych w walutach obcych pozostaja istotnym obciazeniem wyniku.",
+      "source": {
+        "documentId": "doc_e4d70f01-3278-47d1-8add-8a4ff75fec2e",
+        "page": null,
+        "section": "Nota 12 - koszty ryzyka prawnego kredytow hipotecznych w walutach obcych",
+        "evidence": "Koszty ryzyka prawnego wyniosly 36 656 tys. PLN w Q1 2026 wobec 15 894 tys. PLN w Q1 2025."
+      }
+    }
+  ],
+  "conclusions": [
+    {
+      "text": "Fakty wskazuja na wzrost skali dzialalnosci banku przy spadku rentownosci rok do roku.",
+      "source": {
+        "documentId": "doc_e4d70f01-3278-47d1-8add-8a4ff75fec2e",
+        "page": null,
+        "section": "Wybrane dane finansowe i wybrane wskazniki finansowe",
+        "evidence": "Aktywa razem wzrosly do 104 718 199 tys. PLN, ROE spadlo do 12,5%, a ROA do 1,6%."
+      }
+    },
+    {
+      "text": "Bank zwiekszyl wolumen kredytow i depozytow klientow, co wspiera skale bilansu, ale wymaga dalszego monitorowania kosztow ryzyka.",
+      "source": {
+        "documentId": "doc_e4d70f01-3278-47d1-8add-8a4ff75fec2e",
+        "page": null,
+        "section": "Skonsolidowane sprawozdanie z sytuacji finansowej",
+        "evidence": "Naleznosci od klientow wyniosly 68 937 200 tys. PLN, a zobowiazania wobec klientow 85 413 751 tys. PLN."
+      }
+    }
+  ],
+  "extractionWarnings": [
+    {
+      "metricKey": "npl_ratio",
+      "label": "NPL",
+      "reason": "Dotychczasowy szkic nie zawiera jednoznacznego wskaznika NPL; nie zapisujemy metryki bez pewnego zrodla.",
+      "evidence": "W dostepnym szkicu pojawiaja sie DPD 30+, Koszyk 2 i pokrycie odpisami, ale nie bezposredni NPL ratio."
+    },
+    {
+      "metricKey": "cost_of_risk",
+      "label": "Koszt ryzyka",
+      "reason": "Raport moze prezentowac koszt ryzyka jako wskaznik lub jako wartosc rachunku wynikow; fixture zapisuje kwote ECL, a prompt v2 powinien preferowac jawnie opisana jednostke z raportu.",
+      "evidence": "Uzyta wartosc -115 273 tys. PLN pochodzi z pozycji wyniku z tytulu oczekiwanych strat kredytowych."
+    }
+  ]
+}

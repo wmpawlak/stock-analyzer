@@ -14,6 +14,7 @@ import {
   mapAlphaVantageOverview,
   resolveInstrument,
 } from '../src/utils/investmentDetails.js';
+import { getReportMetricDefinition } from '../src/utils/reportMetricDefinitions.js';
 import {
   formatCompactAxisValue,
   formatPercentValue,
@@ -48,6 +49,16 @@ test('resolveInstrument extracts display label and Alpha Vantage symbol', () => 
     symbol: 'AAPL',
     url: 'https://www.google.com/finance/beta/quote/NASDAQ:AAPL',
   });
+});
+
+test('report metric definitions expose catalog tooltip copy for keys and aliases', () => {
+  const costToIncome = getReportMetricDefinition('cost_income_ratio');
+  assert.equal(costToIncome.label, 'C/I');
+  assert.match(costToIncome.description, /Cost to Income/);
+
+  const loanDeposit = getReportMetricDefinition('Loan to Deposit');
+  assert.equal(loanDeposit.metricKey, 'loan_deposit_ratio');
+  assert.match(loanDeposit.description, /depozytow/);
 });
 
 test('getPositionMetrics calculates portfolio and result metrics', () => {

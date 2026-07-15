@@ -32,6 +32,7 @@ import {
   sha256,
   stringOrEmpty,
 } from './utils.js';
+import { findReportMetricSpec, normalizeMetricText } from './analysisMetricCatalog.js';
 import { createStoredZip, extractZipSafely, inspectZip } from './zip.js';
 
 const DATA_VERSION = 1;
@@ -224,9 +225,37 @@ const mapAnalysis = (row, { includeContent = true } = {}) => ({
   approvedAt: row.approved_at || null,
 });
 
+const mapApprovedReportMetric = (row) => ({
+  id: row.id,
+  assetId: row.asset_id,
+  analysisId: row.analysis_id,
+  documentId: row.document_id || '',
+  metricKey: row.metric_key,
+  label: row.label,
+  value: parseJson(row.value_json, null),
+  valueNumeric: row.value_numeric === null || row.value_numeric === undefined ? null : Number(row.value_numeric),
+  unit: row.unit || '',
+  period: row.period,
+  page: row.page === null || row.page === undefined ? null : Number(row.page),
+  section: row.section || '',
+  quote: row.quote || '',
+  confidence: row.confidence === null || row.confidence === undefined ? null : Number(row.confidence),
+  aggregation: row.aggregation || '',
+  source: parseJson(row.source_json, {}),
+  approvedAt: row.approved_at,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
 const ensurePlainObject = (value, message) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new AppError('INVALID_INPUT', message, 400);
   return value;
+};
+
+const normalizeAnalysisTitle = (value) => {
+  const title = stringOrEmpty(value).replace(/\s+/g, ' ').slice(0, 180);
+  if (!title) throw new AppError('INVALID_ANALYSIS_TITLE', 'Nazwa analizy nie moze byc pusta.', 400);
+  return title;
 };
 
 const safeStateKey = (value) => {
@@ -241,6 +270,175 @@ const normalizeStateValue = (key, value) => {
   if (APP_STATE_STRING_KEYS.has(key)) return typeof value === 'string' ? value : String(value ?? '');
   if (value === undefined) throw new AppError('INVALID_STATE_VALUE', 'Wartosc stanu aplikacji nie moze byc pusta.', 400);
   return value;
+};
+
+const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+
+const normalizePage = (value) => {
+  const number = asFiniteNumber(value, null);
+  if (number === null) return null;
+  const page = Math.trunc(number);
+  return page > 0 ? page : null;
+};
+
+const normalizeConfidence = (value) => {
+  const number = asFiniteNumber(value, null);
+  if (number === null) return null;
+  return Math.min(1, Math.max(0, number));
+};
+
+const normalizeReportMetricPeriod = (period) => {
+  const text = stringOrEmpty(period);
+  if (!text) return '';
+
+  const isoDate = text.match(/\b((?:19|20)\d{2})[-/.](0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])\b/);
+  const plDate = text.match(/\b(0?[1-9]|[12]\d|3[01])[-/.](0?[1-9]|1[0-2])[-/.]((?:19|20)\d{2})\b/);
+  const dateParts = isoDate
+    ? { year: Number(isoDate[1]), month: Number(isoDate[2]), day: Number(isoDate[3]) }
+    : plDate
+      ? { year: Number(plDate[3]), month: Number(plDate[2]), day: Number(plDate[1]) }
+      : null;
+  const quarterEnd = dateParts && {
+    '3-31': 1,
+    '6-30': 2,
+    '9-30': 3,
+    '12-31': 4,
+  }[`${dateParts.month}-${dateParts.day}`];
+  if (quarterEnd) return `Q${quarterEnd} ${dateParts.year}`;
+
+  const year = Number((text.match(/(?:19|20)\d{2}/) || [])[0]) || null;
+  const quarter = Number((text.match(/q([1-4])/i) || text.match(/([1-4])q/i) || text.match(/([1-4])\s*(?:kw|kwartal)/i))?.[1]) || null;
+  return year && quarter ? `Q${quarter} ${year}` : text;
+};
+
+const metricFactDocumentId = (fact, documentIds) => (
+  stringOrEmpty(fact?.documentId)
+  || stringOrEmpty(fact?.document_id)
+  || stringOrEmpty(fact?.source?.documentId)
+  || (documentIds.length === 1 ? documentIds[0] : '')
+);
+
+const moneyAmountInPln = (metric) => {
+  const value = asFiniteNumber(metric?.valueNumeric, null);
+  if (value === null) return null;
+  const unit = normalizeMetricText(metric?.unit);
+  if (!unit || (!unit.includes('pln') && !unit.includes('zl'))) return null;
+  if (unit.includes('akcj') || unit.includes('share')) return null;
+  if (unit.includes('mln') || unit.includes('million')) return value * 1_000_000;
+  if (unit.includes('tys') || unit.includes('thousand')) return value * 1_000;
+  return value;
+};
+
+const bestMetricForKey = (rows, metricKey) => rows
+  .filter((metric) => metric.metricKey === metricKey && moneyAmountInPln(metric) !== null)
+  .sort((left, right) => (Number(right.confidence || 0) - Number(left.confidence || 0)))[0] || null;
+
+const derivedDividendNetProfitRows = (rows, analysis, timestamp) => {
+  const dividendRatioSpec = findReportMetricSpec('dividend_net_profit_ratio');
+  const periods = [...new Set(rows.map((metric) => metric.period).filter(Boolean))];
+
+  return periods.flatMap((period) => {
+    const periodRows = rows.filter((metric) => metric.period === period);
+    const dividend = bestMetricForKey(periodRows, 'dividend_amount');
+    const netIncome = bestMetricForKey(periodRows, 'net_income');
+    if (!dividend || !netIncome) return [];
+
+    const dividendAmount = moneyAmountInPln(dividend);
+    const netIncomeAmount = moneyAmountInPln(netIncome);
+    if (dividendAmount === null || netIncomeAmount === null || dividendAmount < 0 || netIncomeAmount <= 0) return [];
+
+    const value = Number(((dividendAmount / netIncomeAmount) * 100).toFixed(2));
+    const sharedDocumentId = dividend.documentId && dividend.documentId === netIncome.documentId ? dividend.documentId : '';
+    const confidenceValues = [dividend.confidence, netIncome.confidence]
+      .map((confidence) => asFiniteNumber(confidence, null))
+      .filter((confidence) => confidence !== null);
+    const confidence = confidenceValues.length ? Math.min(...confidenceValues) : null;
+    const source = {
+      derived: true,
+      documentId: sharedDocumentId,
+      page: null,
+      section: 'Wyliczenie aplikacji',
+      evidence: 'Wyliczone z zatwierdzonych metryk: dywidenda / zysk netto * 100.',
+      inputs: [
+        { metricKey: dividend.metricKey, label: dividend.label, value: dividend.valueNumeric, unit: dividend.unit, period: dividend.period, documentId: dividend.documentId },
+        { metricKey: netIncome.metricKey, label: netIncome.label, value: netIncome.valueNumeric, unit: netIncome.unit, period: netIncome.period, documentId: netIncome.documentId },
+      ],
+    };
+
+    return [{
+      id: newId('metric'),
+      assetId: analysis.asset_id,
+      analysisId: analysis.id,
+      documentId: sharedDocumentId,
+      metricKey: 'dividend_net_profit_ratio',
+      label: dividendRatioSpec?.label || 'Dividend/net profit',
+      valueJson: JSON.stringify(value),
+      valueNumeric: value,
+      unit: '%',
+      period,
+      page: null,
+      section: 'Wyliczenie aplikacji',
+      quote: source.evidence,
+      confidence,
+      aggregation: 'derived',
+      sourceJson: JSON.stringify(source),
+      approvedAt: timestamp,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }];
+  });
+};
+
+const approvedMetricRowsFromAnalysis = (analysis, timestamp) => {
+  const content = parseJson(analysis.content_json, {});
+  const documentIds = parseJson(analysis.document_ids_json, []);
+  const facts = Array.isArray(content.metricFacts) ? content.metricFacts : [];
+
+  const directRows = facts.flatMap((fact) => {
+    if (!fact || typeof fact !== 'object' || Array.isArray(fact)) return [];
+    const spec = findReportMetricSpec(fact.metricKey) || findReportMetricSpec(fact.label);
+    const metricKey = stringOrEmpty(fact.metricKey) || spec?.metricKey || '';
+    if (metricKey === 'dividend_net_profit_ratio' || spec?.metricKey === 'dividend_net_profit_ratio') return [];
+    const period = normalizeReportMetricPeriod(fact.period) || normalizeReportMetricPeriod(content.reportPeriod);
+    if (!metricKey || !period || !hasOwn(fact, 'value')) return [];
+
+    const documentId = metricFactDocumentId(fact, documentIds);
+    const page = normalizePage(fact.page);
+    const valueNumeric = asFiniteNumber(fact.value, null);
+    const source = {
+      documentId,
+      page,
+      section: stringOrEmpty(fact.section),
+      evidence: stringOrEmpty(fact.quote),
+    };
+
+    return [{
+      id: newId('metric'),
+      assetId: analysis.asset_id,
+      analysisId: analysis.id,
+      documentId,
+      metricKey,
+      label: stringOrEmpty(fact.label) || spec?.label || metricKey,
+      valueJson: JSON.stringify(fact.value ?? null),
+      valueNumeric,
+      unit: stringOrEmpty(fact.unit) || spec?.defaultUnit || '',
+      period,
+      page,
+      section: stringOrEmpty(fact.section),
+      quote: stringOrEmpty(fact.quote),
+      confidence: normalizeConfidence(fact.confidence),
+      aggregation: spec?.aggregation || stringOrEmpty(fact.aggregation),
+      sourceJson: JSON.stringify(source),
+      approvedAt: timestamp,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }];
+  });
+
+  return [
+    ...directRows,
+    ...derivedDividendNetProfitRows(directRows, analysis, timestamp),
+  ];
 };
 
 const parseLegacyStateValue = (key, value) => {
@@ -391,6 +589,28 @@ export class AnalysisStore {
         updated_at TEXT NOT NULL,
         approved_at TEXT
       );
+      CREATE TABLE IF NOT EXISTS approved_report_metrics (
+        id TEXT PRIMARY KEY,
+        asset_id TEXT NOT NULL REFERENCES profiles(asset_id) ON DELETE CASCADE,
+        analysis_id TEXT NOT NULL REFERENCES analyses(id) ON DELETE CASCADE,
+        document_id TEXT NOT NULL DEFAULT '',
+        metric_key TEXT NOT NULL,
+        label TEXT NOT NULL,
+        value_json TEXT NOT NULL DEFAULT 'null',
+        value_numeric REAL,
+        unit TEXT NOT NULL DEFAULT '',
+        period TEXT NOT NULL,
+        page INTEGER,
+        section TEXT NOT NULL DEFAULT '',
+        quote TEXT NOT NULL DEFAULT '',
+        confidence REAL,
+        aggregation TEXT NOT NULL DEFAULT '',
+        source_json TEXT NOT NULL DEFAULT '{}',
+        approved_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(asset_id, metric_key, period, document_id)
+      );
       CREATE TABLE IF NOT EXISTS budget_settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         monthly_limit_usd REAL NOT NULL,
@@ -412,6 +632,8 @@ export class AnalysisStore {
       CREATE INDEX IF NOT EXISTS idx_documents_asset ON documents(asset_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_candidates_asset ON candidates(asset_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_analyses_asset ON analyses(asset_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_approved_report_metrics_asset ON approved_report_metrics(asset_id, period, metric_key);
+      CREATE INDEX IF NOT EXISTS idx_approved_report_metrics_analysis ON approved_report_metrics(analysis_id);
       CREATE INDEX IF NOT EXISTS idx_usage_month ON api_usage(month);
     `);
     const current = this.db.prepare('SELECT id FROM budget_settings WHERE id = 1').get();
@@ -599,6 +821,7 @@ export class AnalysisStore {
       documents: this.listDocuments(profile.assetId),
       candidates: this.listCandidates(profile.assetId),
       analyses: this.listAnalyses(profile.assetId),
+      reportMetrics: this.listApprovedReportMetrics(profile.assetId),
     };
   }
 
@@ -841,6 +1064,16 @@ export class AnalysisStore {
     return this.db.prepare('SELECT * FROM analyses WHERE asset_id = ? ORDER BY created_at DESC').all(assetId).map(mapAnalysis);
   }
 
+  listApprovedReportMetrics(assetId) {
+    this.ensureProfileExists(assetId);
+    return this.db.prepare(`
+      SELECT *
+      FROM approved_report_metrics
+      WHERE asset_id = ?
+      ORDER BY period DESC, metric_key COLLATE NOCASE, document_id COLLATE NOCASE
+    `).all(assetId).map(mapApprovedReportMetric);
+  }
+
   getAnalysis(analysisId) {
     const analysis = this.db.prepare('SELECT * FROM analyses WHERE id = ?').get(analysisId);
     if (!analysis) throw new AppError('ANALYSIS_NOT_FOUND', 'Analiza nie istnieje.', 404);
@@ -876,9 +1109,79 @@ export class AnalysisStore {
   approveAnalysis(analysisId) {
     const analysis = this.getAnalysis(analysisId);
     const timestamp = nowIso(this.clock);
-    this.db.prepare('UPDATE analyses SET status = ?, approved_at = ?, updated_at = ? WHERE id = ?')
-      .run('approved', timestamp, timestamp, analysis.id);
+    const approvedMetrics = approvedMetricRowsFromAnalysis(analysis, timestamp);
+    const upsertMetric = this.db.prepare(`
+      INSERT INTO approved_report_metrics
+        (id, asset_id, analysis_id, document_id, metric_key, label, value_json, value_numeric, unit, period, page, section, quote, confidence, aggregation, source_json, approved_at, created_at, updated_at)
+      VALUES
+        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(asset_id, metric_key, period, document_id) DO UPDATE SET
+        analysis_id = excluded.analysis_id,
+        label = excluded.label,
+        value_json = excluded.value_json,
+        value_numeric = excluded.value_numeric,
+        unit = excluded.unit,
+        page = excluded.page,
+        section = excluded.section,
+        quote = excluded.quote,
+        confidence = excluded.confidence,
+        aggregation = excluded.aggregation,
+        source_json = excluded.source_json,
+        approved_at = excluded.approved_at,
+        updated_at = excluded.updated_at
+    `);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('UPDATE analyses SET status = ?, approved_at = ?, updated_at = ? WHERE id = ?')
+        .run('approved', timestamp, timestamp, analysis.id);
+      approvedMetrics.forEach((metric) => {
+        upsertMetric.run(
+          metric.id,
+          metric.assetId,
+          metric.analysisId,
+          metric.documentId,
+          metric.metricKey,
+          metric.label,
+          metric.valueJson,
+          metric.valueNumeric,
+          metric.unit,
+          metric.period,
+          metric.page,
+          metric.section,
+          metric.quote,
+          metric.confidence,
+          metric.aggregation,
+          metric.sourceJson,
+          metric.approvedAt,
+          metric.createdAt,
+          metric.updatedAt,
+        );
+      });
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
     return mapAnalysis(this.getAnalysis(analysis.id));
+  }
+
+  updateAnalysisTitle(analysisId, title) {
+    const analysis = this.getAnalysis(analysisId);
+    const nextTitle = normalizeAnalysisTitle(title);
+    const timestamp = nowIso(this.clock);
+    const content = parseJson(analysis.content_json, {});
+    if (content && typeof content === 'object' && !Array.isArray(content)) {
+      content.title = nextTitle;
+    }
+    this.db.prepare('UPDATE analyses SET title = ?, content_json = ?, updated_at = ? WHERE id = ?')
+      .run(nextTitle, JSON.stringify(content), timestamp, analysis.id);
+    return mapAnalysis(this.getAnalysis(analysis.id));
+  }
+
+  deleteAnalysis(analysisId) {
+    const analysis = this.getAnalysis(analysisId);
+    this.db.prepare('DELETE FROM analyses WHERE id = ?').run(analysis.id);
+    return { deleted: true, id: analysis.id, analysisId: analysis.id, assetId: analysis.asset_id };
   }
 
   getBudget() {

@@ -167,6 +167,9 @@ export const sendError = (response, error) => {
   const appError = error instanceof AppError
     ? error
     : new AppError('INTERNAL_ERROR', 'Wystąpił nieoczekiwany błąd lokalnego helpera.', 500);
+  if (appError.status >= 500) {
+    console.error('[analysis-helper]', appError.code, appError.message);
+  }
   sendJson(response, appError.status, {
     error: {
       code: appError.code,

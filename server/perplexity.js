@@ -1,37 +1,68 @@
 import { AppError, extensionOf, stringOrEmpty } from './utils.js';
+import {
+  ANALYSIS_V2_SCHEMA_VERSION,
+  getReportMetricsForProfile,
+  isBankReportProfile,
+} from './analysisMetricCatalog.js';
+import { extractPdfText } from './pdfText.js';
 
 const PERPLEXITY_ENDPOINT = 'https://api.perplexity.ai/chat/completions';
-const FILE_ATTACHMENT_EXTENSIONS = new Set(['pdf', 'doc', 'docx', 'txt', 'rtf']);
 const INLINE_TEXT_EXTENSIONS = new Set(['txt', 'rtf', 'html', 'htm', 'csv']);
 const MAX_INLINE_TEXT_CHARS = 180_000;
-const MAX_FILE_ATTACHMENTS = 30;
-const VALUATION_METRIC_LABELS = [
-  'C/Z',
-  'C/WK',
-  'C/WK Grahama',
-  'C/P',
-  'C/S',
-  'C/ZO',
-  'EV/P',
-  'EV/EBIT',
-  'EV/EBITDA',
-  'ROA',
-  'ROE',
-];
-const FINANCIAL_RESULT_LABELS = [
-  'Przychody ze sprzedaży',
-  'Zysk (strata) ze sprzedaży',
-  'Zysk operacyjny (EBIT)',
-  'Zysk (strata) z działalności gospodarczej',
-  'Zysk netto',
-  'Aktywa ogółem',
-  'Aktywa obrotowe',
-  'Zobowiązania ogółem',
-  'Zobowiązania długoterminowe',
-  'Zobowiązania krótkoterminowe',
-  'Przepływy pieniężne razem',
-  'Dywidenda za dany rok',
-];
+
+const SOURCE_SCHEMA = { 
+  type: 'object', 
+  additionalProperties: false, 
+  required: ['documentId', 'page', 'section', 'evidence'], 
+  properties: {
+    documentId: { type: 'string' },
+    page: { type: ['integer', 'string', 'null'] },
+    section: { type: 'string' },
+    evidence: { type: 'string' },
+  }, 
+}; 
+
+const STRUCTURED_SUMMARY_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['headline', 'stance', 'sections'],
+  properties: {
+    headline: { type: 'string' },
+    stance: { type: 'string', enum: ['pozytywny', 'mieszany', 'ostrozny', 'negatywny'] },
+    sections: {
+      type: 'array',
+      minItems: 3,
+      maxItems: 7,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['title', 'bullets'],
+        properties: {
+          title: { type: 'string' },
+          bullets: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 5,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['text'],
+              properties: {
+                text: { type: 'string' },
+                metricKeys: {
+                  type: 'array',
+                  maxItems: 6,
+                  items: { type: 'string' },
+                },
+                source: SOURCE_SCHEMA,
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+};
 
 const DISCOVERY_SCHEMA = {
   type: 'object',
@@ -58,53 +89,74 @@ const DISCOVERY_SCHEMA = {
   },
 };
 
-const ANALYSIS_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['schemaVersion', 'title', 'summary', 'conclusions', 'metrics', 'risks', 'reportPeriod'],
-  properties: {
-    schemaVersion: { type: 'string' },
-    title: { type: 'string' },
-    reportPeriod: { type: 'string' },
-    summary: { type: 'string' },
-    conclusions: {
+const ANALYSIS_SCHEMA = { 
+  type: 'object', 
+  additionalProperties: false, 
+  required: ['schemaVersion', 'title', 'reportPeriod', 'summary', 'structuredSummary', 'metricFacts', 'risks', 'conclusions', 'extractionWarnings'], 
+  properties: { 
+    schemaVersion: { type: 'string', enum: [ANALYSIS_V2_SCHEMA_VERSION] }, 
+    title: { type: 'string' }, 
+    reportPeriod: { type: 'string' }, 
+    summary: { type: 'string' }, 
+    structuredSummary: STRUCTURED_SUMMARY_SCHEMA,
+    metricFacts: { 
       type: 'array',
+      maxItems: 120,
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['text'],
+        required: ['metricKey', 'label', 'value', 'unit', 'period', 'page', 'section', 'quote', 'confidence'],
         properties: {
-          text: { type: 'string' },
-          evidence: { type: 'string' },
-        },
-      },
-    },
-    metrics: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['label', 'value'],
-        properties: {
+          metricKey: { type: 'string' },
           label: { type: 'string' },
           value: { type: ['string', 'number', 'null'] },
           unit: { type: 'string' },
           period: { type: 'string' },
-          trend: { type: 'string' },
-          yearOverYear: { type: ['string', 'number', 'null'] },
-          source: { type: 'string' },
+          page: { type: ['integer', 'string', 'null'] },
+          section: { type: 'string' },
+          quote: { type: 'string' },
+          confidence: { type: 'number' },
         },
       },
     },
     risks: {
       type: 'array',
+      maxItems: 30,
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['text'],
+        required: ['text', 'source'],
         properties: {
           text: { type: 'string' },
-          source: { type: 'string' },
+          source: SOURCE_SCHEMA,
+        },
+      },
+    },
+    conclusions: {
+      type: 'array',
+      maxItems: 30,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['text', 'source'],
+        properties: {
+          text: { type: 'string' },
+          source: SOURCE_SCHEMA,
+        },
+      },
+    },
+    extractionWarnings: {
+      type: 'array',
+      maxItems: 60,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['metricKey', 'label', 'reason', 'evidence'],
+        properties: {
+          metricKey: { type: 'string' },
+          label: { type: 'string' },
+          reason: { type: 'string' },
+          evidence: { type: 'string' },
         },
       },
     },
@@ -148,6 +200,16 @@ const normalizeCitations = (payload) => {
     .slice(0, 30);
 };
 
+const fetchFailureMessage = (error) => {
+  const code = stringOrEmpty(error?.cause?.code);
+  const base = stringOrEmpty(error?.message) || 'fetch failed';
+  if (['UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'SELF_SIGNED_CERT_IN_CHAIN', 'DEPTH_ZERO_SELF_SIGNED_CERT'].includes(code)) {
+    return `Nie udalo sie polaczyc z Perplexity: Node odrzucil certyfikat TLS (${code}). Uruchom helper przez npm run dev po aktualizacji; helper startuje z --use-system-ca. Jesli problem zostanie, ustaw NODE_EXTRA_CA_CERTS na firmowy certyfikat CA.`;
+  }
+  if (code) return `Nie udalo sie polaczyc z Perplexity: ${base} (${code}).`;
+  return `Nie udalo sie polaczyc z Perplexity: ${base}.`;
+};
+
 const requestCompletion = async ({ apiKey, model, messages, schema, fetchImpl = fetch }) => {
   const key = stringOrEmpty(apiKey);
   if (!key) {
@@ -172,16 +234,16 @@ const requestCompletion = async ({ apiKey, model, messages, schema, fetchImpl = 
       }),
     });
   } catch (error) {
-    throw new AppError('PERPLEXITY_UNAVAILABLE', `Nie udało się połączyć z Perplexity: ${error.message}`, 502);
+    throw new AppError('PERPLEXITY_UNAVAILABLE', fetchFailureMessage(error), 502);
   }
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    const message = stringOrEmpty(payload?.error?.message) || `Perplexity zwrócił HTTP ${response.status}.`;
+    const message = stringOrEmpty(payload?.error?.message) || `Perplexity zwrocil HTTP ${response.status}.`;
     throw new AppError('PERPLEXITY_ERROR', message, 502);
   }
   const content = payload?.choices?.[0]?.message?.content;
   if (typeof content !== 'string' || !content.trim()) {
-    throw new AppError('PERPLEXITY_INVALID_RESPONSE', 'Perplexity nie zwrócił treści analizy.', 502);
+    throw new AppError('PERPLEXITY_INVALID_RESPONSE', 'Perplexity nie zwrocil tresci analizy.', 502);
   }
   return { payload, content, costUsd: readCost(payload), citations: normalizeCitations(payload) };
 };
@@ -210,11 +272,11 @@ export const discoverCandidatesWithPerplexity = async ({ apiKey, profile, source
   const messages = [
     {
       role: 'system',
-      content: 'Jesteś analitykiem inwestycyjnym. Szukasz wyłącznie dokumentów pierwotnych i oficjalnych. Odpowiadasz po polsku, bez rekomendacji kupna lub sprzedaży.',
+      content: 'Jestes analitykiem inwestycyjnym. Szukasz wylacznie dokumentow pierwotnych i oficjalnych. Odpowiadasz po polsku, bez rekomendacji kupna lub sprzedazy.',
     },
     {
       role: 'user',
-      content: `Znajdź najnowszy oficjalny raport okresowy dla aktywa. Dla spółki może to być raport kwartalny, półroczny albo roczny; gdy emitent publikuje pełny pakiet ZIP, zwróć link do tego pakietu zamiast samej prezentacji lub informacji prasowej. Dla ETF-u zwróć aktualny factsheet, KID oraz dokument ze składem/holdings, jeśli jest dostępny. Preferuj podane źródła i zwróć tylko kandydatów z bezpośrednim URL-em do dokumentu lub oficjalnej strony raportu. Nie wybieraj mediów, agregatorów ani strony z samym kursem.\n\nAktywo:\n${JSON.stringify({ assetId: profile.assetId, type: profile.type, name: profile.name, canonicalId: profile.canonicalId })}\n\nŹródła zapisane przez użytkownika:\n${JSON.stringify(sourceList)}`,
+      content: `Znajdz najnowszy oficjalny raport okresowy dla aktywa. Dla spolki moze to byc raport kwartalny, polroczny albo roczny; gdy emitent publikuje pelny pakiet ZIP, zwroc link do tego pakietu zamiast samej prezentacji lub informacji prasowej. Dla ETF-u zwroc aktualny factsheet, KID oraz dokument ze skladem/holdings, jesli jest dostepny. Preferuj podane zrodla i zwroc tylko kandydatow z bezposrednim URL-em do dokumentu lub oficjalnej strony raportu. Nie wybieraj mediow, agregatorow ani strony z samym kursem.\n\nAktywo:\n${JSON.stringify({ assetId: profile.assetId, type: profile.type, name: profile.name, canonicalId: profile.canonicalId })}\n\nZrodla zapisane przez uzytkownika:\n${JSON.stringify(sourceList)}`,
     },
   ];
   const result = await requestCompletion({ apiKey, model: 'sonar', messages, schema: DISCOVERY_SCHEMA, fetchImpl });
@@ -229,6 +291,7 @@ export const discoverCandidatesWithPerplexity = async ({ apiKey, profile, source
 
 const textFromBuffer = (document, buffer) => {
   const extension = extensionOf(document.filename);
+  if (extension === 'pdf') return extractPdfText(buffer, { maxChars: MAX_INLINE_TEXT_CHARS });
   if (!INLINE_TEXT_EXTENSIONS.has(extension)) return '';
   const text = buffer.toString('utf8').split('\0').join('');
   if (extension === 'html' || extension === 'htm') {
@@ -239,43 +302,167 @@ const textFromBuffer = (document, buffer) => {
 
 const documentContentPart = (document, buffer) => {
   const extension = extensionOf(document.filename);
-  if (FILE_ATTACHMENT_EXTENSIONS.has(extension)) {
-    return {
-      type: 'file_url',
-      file_url: { url: buffer.toString('base64') },
-    };
-  }
   const inline = textFromBuffer(document, buffer);
-  if (inline) return { type: 'text', text: `\n\n--- ${document.filename} ---\n${inline}` };
+  if (inline) {
+    const extractionNote = extension === 'pdf' ? ' (tekst wyodrebniony lokalnie z PDF)' : '';
+    return { type: 'text', text: `\n\n--- ${document.filename}${extractionNote} ---\n${inline}` };
+  }
   const source = stringOrEmpty(document.sourceUrl);
   return {
     type: 'text',
-    text: `\n\nDokument ${document.filename} ma format ${extension.toUpperCase()}, którego nie dołączono binarnie. Korzystaj wyłącznie z zarchiwizowanej metadanej i oficjalnego adresu: ${source || 'brak URL'}. Nie wymyślaj danych niedostępnych w pliku.`,
+    text: `\n\nDokument ${document.filename} ma format ${extension.toUpperCase()}, ktorego nie dolaczono binarnie. Korzystaj wylacznie z zarchiwizowanej metadanej i oficjalnego adresu: ${source || 'brak URL'}. Nie wymyslaj danych niedostepnych w pliku.`,
   };
 };
 
-const normaliseAnalysis = (parsed, fallback) => ({
-  schemaVersion: stringOrEmpty(parsed?.schemaVersion) || '1.0',
-  title: stringOrEmpty(parsed?.title) || fallback.title,
-  reportPeriod: stringOrEmpty(parsed?.reportPeriod) || fallback.reportPeriod,
-  summary: stringOrEmpty(parsed?.summary) || fallback.summary,
-  conclusions: Array.isArray(parsed?.conclusions) ? parsed.conclusions.filter(Boolean).slice(0, 20) : [],
-  metrics: Array.isArray(parsed?.metrics) ? parsed.metrics.filter(Boolean).slice(0, 80) : [],
-  risks: Array.isArray(parsed?.risks) ? parsed.risks.filter(Boolean).slice(0, 30) : [],
-});
+const sourceLabel = (source) => {
+  if (!source || typeof source !== 'object') return '';
+  return [
+    source.section,
+    source.page !== null && source.page !== undefined && source.page !== '' ? `strona ${source.page}` : '',
+    source.evidence || source.quote,
+  ].filter(Boolean).join(' - ');
+};
+
+const metricFactToMetric = (fact) => ({ 
+  label: stringOrEmpty(fact?.label) || stringOrEmpty(fact?.metricKey),
+  value: fact?.value ?? null,
+  unit: stringOrEmpty(fact?.unit),
+  period: stringOrEmpty(fact?.period),
+  source: sourceLabel(fact),
+}); 
+
+const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const normaliseSummaryBullet = (bullet) => {
+  if (typeof bullet === 'string') return { text: bullet };
+  if (!isPlainObject(bullet)) return null;
+  const text = stringOrEmpty(bullet.text);
+  if (!text) return null;
+  const result = { text };
+  if (Array.isArray(bullet.metricKeys)) result.metricKeys = bullet.metricKeys.map(stringOrEmpty).filter(Boolean).slice(0, 6);
+  if (isPlainObject(bullet.source)) result.source = bullet.source;
+  return result;
+};
+
+const normaliseStructuredSummary = (value, fallbackSummary) => {
+  if (isPlainObject(value)) {
+    const sections = Array.isArray(value.sections)
+      ? value.sections.map((section) => {
+        if (!isPlainObject(section)) return null;
+        const title = stringOrEmpty(section.title);
+        const bullets = Array.isArray(section.bullets)
+          ? section.bullets.map(normaliseSummaryBullet).filter(Boolean).slice(0, 5)
+          : [];
+        return title && bullets.length ? { title, bullets } : null;
+      }).filter(Boolean).slice(0, 7)
+      : [];
+    if (stringOrEmpty(value.headline) && sections.length) {
+      const stance = ['pozytywny', 'mieszany', 'ostrozny', 'negatywny'].includes(value.stance) ? value.stance : 'mieszany';
+      return { headline: stringOrEmpty(value.headline), stance, sections };
+    }
+  }
+
+  const text = stringOrEmpty(fallbackSummary);
+  if (!text) return null;
+  return {
+    headline: text.length > 180 ? `${text.slice(0, 177).trim()}...` : text,
+    stance: 'mieszany',
+    sections: [{
+      title: 'Podsumowanie',
+      bullets: [{ text }],
+    }],
+  };
+};
+
+const normaliseAnalysis = (parsed, fallback) => {
+  const metricFacts = Array.isArray(parsed?.metricFacts) ? parsed.metricFacts.filter(Boolean).slice(0, 120) : [];
+  const risks = Array.isArray(parsed?.risks) ? parsed.risks.filter(Boolean).slice(0, 30) : [];
+  const conclusions = Array.isArray(parsed?.conclusions) ? parsed.conclusions.filter(Boolean).slice(0, 30) : [];
+  const extractionWarnings = Array.isArray(parsed?.extractionWarnings) ? parsed.extractionWarnings.filter(Boolean).slice(0, 60) : [];
+  const legacyMetrics = Array.isArray(parsed?.metrics)
+    ? parsed.metrics.filter(Boolean).slice(0, 120)
+    : metricFacts.map(metricFactToMetric);
+
+  return { 
+    schemaVersion: ANALYSIS_V2_SCHEMA_VERSION, 
+    title: stringOrEmpty(parsed?.title) || fallback.title, 
+    reportPeriod: stringOrEmpty(parsed?.reportPeriod) || fallback.reportPeriod, 
+    summary: stringOrEmpty(parsed?.summary) || fallback.summary, 
+    structuredSummary: normaliseStructuredSummary(parsed?.structuredSummary, stringOrEmpty(parsed?.summary) || fallback.summary),
+    metricFacts, 
+    risks, 
+    conclusions,
+    extractionWarnings,
+    metrics: legacyMetrics,
+  };
+};
+
+const metricCatalogForPrompt = (profile) => getReportMetricsForProfile(profile).map((spec) => ({
+  metricKey: spec.metricKey,
+  label: spec.label,
+  category: spec.category,
+  valueType: spec.valueType,
+  defaultUnit: spec.defaultUnit,
+  aggregation: spec.aggregation,
+  description: spec.description,
+  aliases: spec.aliases,
+  keywords: spec.keywords,
+}));
+
+const bankAnalysisRules = (profile) => (isBankReportProfile(profile) ? `
+Reguly profilu bankowego:
+- Dla profilu bankowego priorytetem jest bankowy katalog metryk ponizej. Nie zbieraj dowolnych liczb ani pobocznych KPI spoza katalogu jako metricFacts.
+- Szukaj kazdej metryki po nazwach polskich, nazwach angielskich oraz skrotach z pola aliases, np. Return on Equity, Return on Assets, Cost to Income, Non-Performing Loans, Cost of Risk, Total Capital Ratio, Loan to Deposit, Earnings per Share.
+- Dla wartosci pienieznych wiodace sa PLN / tys. PLN / mln PLN. Jezeli tabela lub kolumna jest w innej walucie, nie uzywaj jej jako glownego zrodla metricFact; wpisz niepewnosc albo brak zgodnej waluty do extractionWarnings.
+- Jezeli raport pokazuje kilka kwartalow albo okresow porownawczych dla tej samej metryki bankowej, zwroc wszystkie wiarygodne okresy widoczne w tabeli, a nie tylko najnowszy.
+` : '');
+
+const buildAnalysisPrompt = ({ profile, metadata }) => {
+  const catalog = metricCatalogForPrompt(profile);
+  return `Przeanalizuj zatwierdzone dokumenty dla aktywa ponizej. Odpowiedz musi byc po polsku i wylacznie jako JSON zgodny ze schematem.
+
+Cel pracy: 
+1. Ekstrakcja faktow: znajdz metryki z katalogu metryk, uzywajac metricKey, aliasow i slow kluczowych. 
+2. Kompozycja analizy: napisz summary, structuredSummary, risks i conclusions wylacznie na podstawie wyekstrahowanych faktow i cytowanych fragmentow dokumentu. 
+
+Twarde reguly:
+- Nie zgaduj. Brak pewnego zrodla oznacza brak metricFact i wpis w extractionWarnings.
+- Kazda liczba w metricFacts musi miec metricKey, label, value, unit, period, page, section, quote i confidence.
+- Kazde risk i conclusion musi miec source z documentId, page, section i evidence.
+- quote oraz source.evidence maja byc krotkimi dowodami z dokumentu, nie parafraza bez zakotwiczenia.
+- Jezeli numer strony nie jest dostepny w narzedziu, ustaw page na null, ale nadal wypelnij section i quote/evidence.
+- value ma byc sama liczba albo null; jednostka trafia tylko do unit.
+- Czytaj nie tylko kolumny okresu glownego raportu, ale tez kolumny porownawcze w tych samych tabelach, np. Q1 2025 albo 31.03.2025 w raporcie Q1 2026.
+- Dla kazdej metryki zwroc osobny metricFact dla kazdego wiarygodnie odczytanego okresu porownawczego. Przyklad: net_income dla Q1 2026 i net_income dla Q1 2025 to dwa metricFacts.
+- Normalizuj okresy kwartalne do formatu Q1 2026, Q2 2026, Q3 2026 albo Q4 2026. Daty konca kwartalu 31.03.YYYY, 30.06.YYYY, 30.09.YYYY i 31.12.YYYY traktuj odpowiednio jako Q1, Q2, Q3 i Q4 tego roku.
+- Jezeli tabela pokazuje date bilansowa bedaca koncem kwartalu, w polu period wpisz kwartal, np. Q1 2026 zamiast 31.03.2026.
+- Nie tworz okresu porownawczego, jezeli wartosc nie jest bezposrednio widoczna w dokumencie. 
+- Nie zwracaj rekomendacji kupna/sprzedazy. 
+
+Reguly structuredSummary:
+- Pisz jak analityk dla czlowieka: przystepnie, konkretnie i bez suchego wyliczania liczb.
+- structuredSummary.headline ma zawierac jedna najwazniejsza teze z raportu.
+- structuredSummary.stance ustaw jako syntetyczna ocene tonu raportu bez rekomendacji inwestycyjnej: pozytywny, mieszany, ostrozny albo negatywny.
+- structuredSummary.sections ma zawierac sekcje: Najwazniejsze fakty, Zmiana vs rok temu, Jakosc wyniku, Ryzyka i kapital, Co sprawdzic dalej. Dla profilu niebankowego dopasuj nazwy do raportu, ale zachowaj sens tych obszarow.
+- W bullets wyjasniaj znaczenie danych: co sie poprawilo/pogorszylo, czy wynik wyglada powtarzalnie, jakie ryzyka moga znieksztalcac obraz oraz co uzytkownik powinien sprawdzic w kolejnym kroku.
+- Gdy bullet opiera sie na liczbach, dodaj metricKeys z odpowiednimi metricKey z katalogu i source, jezeli wniosek ma bezposrednie zakotwiczenie w dokumencie.
+${bankAnalysisRules(profile)} 
+
+Aktywo:
+${JSON.stringify({ assetId: profile.assetId, type: profile.type, name: profile.name, canonicalId: profile.canonicalId })}
+
+Dokumenty:
+${JSON.stringify(metadata)}
+
+Katalog metryk do ekstrakcji:
+${JSON.stringify(catalog, null, 2)}`;
+};
 
 export const analyzeDocumentsWithPerplexity = async ({ apiKey, profile, documents, documentBuffers, fetchImpl }) => {
   if (!Array.isArray(documents) || !documents.length || !Array.isArray(documentBuffers) || documentBuffers.length !== documents.length) {
     throw new AppError('NO_DOCUMENTS_SELECTED', 'Wybierz dokumenty do analizy.', 400);
   }
-  const attachments = [];
-  let fileAttachmentCount = 0;
-  documents.forEach((document, index) => {
-    const part = documentContentPart(document, documentBuffers[index]);
-    if (part.type === 'file_url' && fileAttachmentCount >= MAX_FILE_ATTACHMENTS) return;
-    attachments.push(part);
-    if (part.type === 'file_url') fileAttachmentCount += 1;
-  });
+  const attachments = documents.map((document, index) => documentContentPart(document, documentBuffers[index]));
   const metadata = documents.map((document) => ({
     id: document.id,
     filename: document.filename,
@@ -285,18 +472,13 @@ export const analyzeDocumentsWithPerplexity = async ({ apiKey, profile, document
     publishedAt: document.publishedAt,
     sourceUrl: document.sourceUrl,
   }));
-  const metricInstructions = `W polu metrics zwracaj w pierwszej kolejności poniższe etykiety, dokładnie w tym brzmieniu, jeśli dane są dostępne:
-- wskaźniki wyceny i rentowności: ${VALUATION_METRIC_LABELS.join(', ')}
-- wyniki finansowe: ${FINANCIAL_RESULT_LABELS.join(', ')}
-
-Dla każdej metryki ustaw: label jako jedną z powyższych etykiet, value jako samą liczbę lub null, unit jako osobną jednostkę (np. "x", "%", "tys. PLN", "mln PLN", "PLN/akcję"), period jako "Q1 2026", "Q2 2026", "2026" itd. Nie doklejaj jednostki do value. Dla danych rachunku wyników i przepływów zwracaj okresy kwartalne, jeśli są w dokumencie. Dla aktywów i zobowiązań traktuj wartość jako stan na koniec okresu.`;
-  const prompt = `Przeanalizuj zatwierdzone dokumenty dla aktywa poniżej. Odpowiedź musi być po polsku. Traktuj dokumenty jako źródło główne; wyraźnie oddziel fakty od interpretacji. Porównuj rok do roku, gdy dokument zawiera porównywalne dane. Jeśli metryki nie da się wiarygodnie ustalić, nie dodawaj jej. Nie podawaj rekomendacji inwestycyjnej.\n\nAktywo: ${JSON.stringify({ assetId: profile.assetId, type: profile.type, name: profile.name, canonicalId: profile.canonicalId })}\n\nDokumenty: ${JSON.stringify(metadata)}`;
+  const prompt = buildAnalysisPrompt({ profile, metadata });
   const messages = [
     {
       role: 'system',
-      content: 'Jesteś ostrożnym analitykiem raportów spółek i ETF-ów. Każda liczba powinna mieć okres i źródło. Zwróć wyłącznie strukturę JSON zgodną ze schematem.',
+      content: 'Jestes ostroznym analitykiem raportow spolek, bankow i ETF-ow. Pracujesz provider-neutralnie: najpierw ekstrahujesz fakty ze zrodlami, potem komponujesz analize tylko z tych faktow. Zwracasz wylacznie JSON zgodny ze schematem.',
     },
-    { role: 'user', content: [{ type: 'text', text: `${prompt}\n\n${metricInstructions}` }, ...attachments] },
+    { role: 'user', content: [{ type: 'text', text: prompt }, ...attachments] },
   ];
   const result = await requestCompletion({ apiKey, model: 'sonar-pro', messages, schema: ANALYSIS_SCHEMA, fetchImpl });
   const parsed = safeJson(result.content, {});
