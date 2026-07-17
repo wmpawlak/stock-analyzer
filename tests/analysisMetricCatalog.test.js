@@ -6,10 +6,12 @@ import {
   ANALYSIS_V2_SCHEMA_VERSION,
   BANK_REPORT_METRICS,
   COMMON_REPORT_METRICS,
+  PRIORITY_BANK_REPORT_METRIC_KEYS,
   REPORT_METRIC_CATALOG,
   findReportMetricSpec,
   getReportMetricsForProfile,
   isBankReportProfile,
+  metricUnitMatchesValueType,
   validateAnalysisV2Shape,
 } from '../server/analysisMetricCatalog.js';
 
@@ -22,9 +24,9 @@ const fixturePath = path.join(
 );
 
 test('report metric catalog contains common and bank metrics for the v2 workshop', () => {
-  assert.equal(COMMON_REPORT_METRICS.length, 7);
-  assert.equal(BANK_REPORT_METRICS.length, 13);
-  assert.equal(REPORT_METRIC_CATALOG.length, 20);
+  assert.equal(COMMON_REPORT_METRICS.length, 16);
+  assert.equal(BANK_REPORT_METRICS.length, 16);
+  assert.equal(REPORT_METRIC_CATALOG.length, 32);
 
   const keys = new Set(REPORT_METRIC_CATALOG.map((metric) => metric.metricKey));
   [
@@ -44,19 +46,63 @@ test('report metric catalog contains common and bank metrics for the v2 workshop
     'dividend_net_profit_ratio',
     'customer_deposits',
     'customer_loans',
+    'roic',
+    'gross_margin',
+    'operating_margin',
+    'net_margin',
+    'nim',
+    'mrel',
+    'net_debt_ebitda',
+    'current_ratio',
+    'quick_ratio',
+    'lcr',
+    'free_cash_flow',
+    'dividend_per_share',
   ].forEach((key) => assert.equal(keys.has(key), true, `${key} missing from catalog`));
 
   REPORT_METRIC_CATALOG.forEach((metric) => {
     assert.equal(typeof metric.description, 'string', `${metric.metricKey} description missing`);
     assert.ok(metric.description.length >= 20, `${metric.metricKey} description too short`);
+    assert.equal(typeof metric.shortName, 'string', `${metric.metricKey} shortName missing`);
+    assert.equal(typeof metric.namePl, 'string', `${metric.metricKey} namePl missing`);
+    assert.equal(typeof metric.nameEn, 'string', `${metric.metricKey} nameEn missing`);
+    assert.ok(['primary', 'secondary'].includes(metric.tier), `${metric.metricKey} tier invalid`);
+    assert.ok(metric.aliases.includes(metric.shortName), `${metric.metricKey} shortName missing from aliases`);
+    assert.ok(metric.aliases.includes(metric.namePl), `${metric.metricKey} namePl missing from aliases`);
+    assert.ok(metric.aliases.includes(metric.nameEn), `${metric.metricKey} nameEn missing from aliases`);
   });
+});
+
+test('catalog tiers keep the bank checklist primary and all additional metrics secondary', () => {
+  const primaryKeys = REPORT_METRIC_CATALOG
+    .filter((metric) => metric.tier === 'primary')
+    .map((metric) => metric.metricKey);
+  assert.deepEqual(primaryKeys, PRIORITY_BANK_REPORT_METRIC_KEYS);
+
+  [
+    'roic',
+    'gross_margin',
+    'operating_margin',
+    'net_margin',
+    'nim',
+    'mrel',
+    'net_debt_ebitda',
+    'current_ratio',
+    'quick_ratio',
+    'lcr',
+    'free_cash_flow',
+    'dividend_per_share',
+  ].forEach((key) => assert.equal(findReportMetricSpec(key)?.tier, 'secondary'));
+
+  assert.equal(findReportMetricSpec('Payout Ratio')?.metricKey, 'dividend_net_profit_ratio');
+  assert.equal(REPORT_METRIC_CATALOG.some((metric) => metric.metricKey === 'payout_ratio'), false);
 });
 
 test('bank catalog labels match the requested Alior metric set', () => {
   const labelsByKey = new Map(REPORT_METRIC_CATALOG.map((metric) => [metric.metricKey, metric.label]));
   assert.equal(labelsByKey.get('net_income'), 'Zysk netto');
-  assert.equal(labelsByKey.get('net_interest_income'), 'Wynik z tytulu odsetek');
-  assert.equal(labelsByKey.get('net_fee_commission_income'), 'Wynik z oplat i prowizji');
+  assert.equal(labelsByKey.get('net_interest_income'), 'Wynik z tytułu odsetek');
+  assert.equal(labelsByKey.get('net_fee_commission_income'), 'Wynik z opłat i prowizji');
   assert.equal(labelsByKey.get('roe'), 'ROE');
   assert.equal(labelsByKey.get('roa'), 'ROA');
   assert.equal(labelsByKey.get('cost_income_ratio'), 'C/I');
@@ -68,8 +114,25 @@ test('bank catalog labels match the requested Alior metric set', () => {
   assert.equal(labelsByKey.get('dividend_net_profit_ratio'), 'Dividend/net profit');
 });
 
+test('bank priority metric checklist keeps the requested display order', () => {
+  assert.deepEqual(PRIORITY_BANK_REPORT_METRIC_KEYS, [
+    'net_income',
+    'net_interest_income',
+    'net_fee_commission_income',
+    'roe',
+    'roa',
+    'cost_income_ratio',
+    'npl_ratio',
+    'cost_of_risk',
+    'tcr',
+    'loan_deposit_ratio',
+    'eps',
+    'dividend_net_profit_ratio',
+  ]);
+});
+
 test('bank aliases resolve to stable metric keys', () => {
-  assert.equal(findReportMetricSpec('Wynik z tytulu odsetek')?.metricKey, 'net_interest_income');
+  assert.equal(findReportMetricSpec('Wynik z tytułu odsetek')?.metricKey, 'net_interest_income');
   assert.equal(findReportMetricSpec('wynik z tytułu prowizji i opłat')?.metricKey, 'net_fee_commission_income');
   assert.equal(findReportMetricSpec('Zobowiązania wobec klientów')?.metricKey, 'customer_deposits');
   assert.equal(findReportMetricSpec('Współczynnik wypłacalności')?.metricKey, 'tcr');
@@ -88,6 +151,15 @@ test('new bank aliases resolve Polish abbreviations and English metric names', (
   assert.equal(findReportMetricSpec('payout ratio')?.metricKey, 'dividend_net_profit_ratio');
 });
 
+test('CoR is a percentage metric and does not alias monetary risk costs', () => {
+  const costOfRisk = findReportMetricSpec('CoR');
+  assert.equal(costOfRisk?.valueType, 'percent');
+  assert.equal(costOfRisk?.aggregation, 'point_in_time');
+  assert.equal(findReportMetricSpec('Koszty ryzyka prawnego'), null);
+  assert.equal(metricUnitMatchesValueType('%', costOfRisk.valueType), true);
+  assert.equal(metricUnitMatchesValueType('PLN', costOfRisk.valueType), false);
+});
+
 test('bank profiles receive common plus bank metrics', () => {
   const metrics = getReportMetricsForProfile({
     type: 'instrument',
@@ -95,9 +167,13 @@ test('bank profiles receive common plus bank metrics', () => {
     canonicalId: 'ALR:WSE',
   });
   assert.equal(metrics.length, REPORT_METRIC_CATALOG.length);
+  assert.equal(metrics.some((metric) => metric.metricKey === 'nim'), true);
+  assert.equal(metrics.some((metric) => metric.metricKey === 'free_cash_flow'), true);
 
   const nonBankMetrics = getReportMetricsForProfile({ type: 'company', name: 'CD PROJEKT' });
   assert.equal(nonBankMetrics.length, COMMON_REPORT_METRICS.length);
+  assert.equal(nonBankMetrics.some((metric) => metric.metricKey === 'free_cash_flow'), true);
+  assert.equal(nonBankMetrics.some((metric) => metric.metricKey === 'nim'), false);
 });
 
 test('bank profile detection is shared by catalog and prompt rules', () => {

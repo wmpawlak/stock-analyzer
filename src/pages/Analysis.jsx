@@ -4,7 +4,13 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import useLiveData from '../hooks/useLiveData.js';
 import { getPositionMetrics } from '../utils/investmentDetails.js';
 import { normalizeText, parseNumericValue } from '../utils/number.js';
-import { getReportMetricDefinition } from '../utils/reportMetricDefinitions.js';
+import {
+  filterReportMetricFactsForPeriod,
+  formatReportMetricValue,
+  getPriorityBankReportMetricDefinitions,
+  getReportMetricDefinition,
+  sortReportMetricFacts,
+} from '../utils/reportMetricDefinitions.js';
 import {
   ANALYSIS_ASSET_IDS,
   getAnalysisRoute,
@@ -21,6 +27,7 @@ import {
   PERSISTENT_STATE_KEYS,
   hydratePersistentState,
 } from '../utils/persistentStorage.js';
+import { getReportPeriodInfo } from '../../shared/reportPeriods.js';
 
 const EMPTY_VALUE = '—';
 
@@ -103,10 +110,10 @@ const Badge = ({ children, status, className = '' }) => (
 
 const SectionHeading = ({ title, description, action }) => (
   <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-    <div>
+    <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
       <h2 className="text-base font-bold text-white">{title}</h2>
       {description && <p className="mt-1 text-xs leading-5 text-slate-500">{description}</p>}
-    </div>
+    </section>
     {action}
   </div>
 );
@@ -519,6 +526,13 @@ const PositionSummary = ({ positions }) => {
   );
 };
 
+const PositionSummaryPanel = ({ positions }) => (
+  <div className="rounded-xl border border-slate-800/70 bg-slate-950/45 p-4">
+    <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">Biezaca pozycja</p>
+    <PositionSummary positions={positions} />
+  </div>
+);
+
 const SourceList = ({ sources, helperOnline, busy, onAdd, onDelete }) => {
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ title: '', url: '', role: 'official' });
@@ -804,26 +818,60 @@ const getFactSource = (fact) => ({
   evidence: fact?.quote || fact?.source?.evidence || '',
 });
 
-const formatAnalysisMetricValue = (metric) => {
-  const value = metric?.value ?? metric?.displayValue ?? metric?.text ?? EMPTY_VALUE;
-  const unit = stringOrEmpty(metric?.unit || metric?.currency);
-  if (value === null || value === undefined || value === '') return EMPTY_VALUE;
-  if (typeof value === 'number') return [formatMetricNumber(value, 2), unit].filter(Boolean).join(' ');
-  return [String(value), unit].filter(Boolean).join(' ');
+const formatConfidenceLabel = (value) => {
+  const confidence = Number(value);
+  if (!Number.isFinite(confidence)) return '';
+  const percent = confidence <= 1 ? confidence * 100 : confidence;
+  return `Pewność: ${formatNumber(percent, 0)}%`;
 };
 
-const SourceNote = ({ source, evidence }) => { 
-  const parts = getSourceParts(source); 
-  const proof = stringOrEmpty(evidence || source?.evidence || source?.quote); 
-  if (!parts.length && !proof) return null; 
+const SourceTooltip = ({ source, evidence, confidence, className = '' }) => {
+  const sourceText = typeof source === 'string' ? source.trim() : '';
+  const parts = sourceText ? [] : getSourceParts(source);
+  const proof = stringOrEmpty(evidence || sourceText || source?.evidence || source?.quote);
+  const confidenceText = formatConfidenceLabel(confidence);
+  if (!parts.length && !proof && !confidenceText) return null;
+
+  const tooltipId = `source-tooltip-${[
+    sourceText || source?.documentId || source?.document_id || '',
+    source?.page ?? '',
+    source?.section || '',
+    proof.slice(0, 24),
+  ].join('-').replace(/[^a-z0-9_-]/gi, '-')}`;
 
   return (
-    <div className="mt-2 rounded-lg border border-slate-800/70 bg-slate-950/45 px-3 py-2 text-xs leading-5 text-slate-400">
-      {parts.length > 0 && <p className="font-semibold text-slate-300">{parts.join(' · ')}</p>}
-      {proof && <p className="mt-1 text-slate-500">{proof}</p>}
-    </div> 
-  ); 
-}; 
+    <span className={`group relative inline-flex shrink-0 ${className}`}>
+      <button
+        type="button"
+        className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-700 bg-slate-950 text-[10px] font-bold leading-none text-slate-400 transition-colors hover:border-blue-400/60 hover:text-blue-200 focus-visible:border-blue-300 focus-visible:text-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/30"
+        aria-label="Źródło wartości"
+        aria-describedby={tooltipId}
+      >
+        i
+      </button>
+      <span
+        id={tooltipId}
+        role="tooltip"
+        className="pointer-events-none absolute right-0 top-5 z-50 hidden max-h-56 w-80 max-w-[min(20rem,calc(100vw-3rem))] overflow-y-auto rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-left text-xs font-normal leading-5 text-slate-300 shadow-xl shadow-slate-950/40 group-hover:block group-focus-within:block"
+      >
+        {parts.length > 0 && <span className="block font-semibold text-slate-200">{parts.join(' · ')}</span>}
+        {proof && <span className="mt-1 block whitespace-pre-wrap text-slate-400">{proof}</span>}
+        {confidenceText && <span className="mt-1 block text-slate-500">{confidenceText}</span>}
+      </span>
+    </span>
+  );
+};
+
+const MetricValueWithSource = ({ value, source, evidence, confidence, className = '' }) => (
+  <div className={`inline-flex max-w-full items-start gap-1.5 ${className}`}>
+    <p className="min-w-0 break-words font-mono text-sm font-semibold">{value}</p>
+    <SourceTooltip source={source} evidence={evidence} confidence={confidence} className="mt-0.5" />
+  </div>
+);
+
+const SourceInlineInfo = ({ source, evidence, confidence, className = '' }) => (
+  <SourceTooltip source={source} evidence={evidence} confidence={confidence} className={className} />
+);
 
 const SUMMARY_STANCE_LABELS = {
   pozytywny: 'Pozytywny',
@@ -937,13 +985,15 @@ const StructuredSummary = ({ summary }) => {
                   const metricKeys = isObject && Array.isArray(bullet.metricKeys) ? bullet.metricKeys.filter(Boolean) : [];
                   return (
                     <li key={`${bulletIndex}-${text.slice(0, 16)}`} className="text-slate-300">
-                      <p><MarkdownInline text={text} /></p>
+                      <p className="inline-flex max-w-full items-start gap-1.5">
+                        <span className="min-w-0"><MarkdownInline text={text} /></span>
+                        {isObject && bullet.source && <SourceInlineInfo source={bullet.source} className="mt-0.5" />}
+                      </p>
                       {metricKeys.length > 0 && (
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           {metricKeys.map((metricKey) => <Badge key={metricKey}>{metricKey}</Badge>)}
                         </div>
                       )}
-                      {isObject && bullet.source && <SourceNote source={bullet.source} />}
                     </li>
                   );
                 })}
@@ -966,7 +1016,7 @@ const SummaryPanel = ({ analysis }) => {
       {structuredSummary ? (
         <StructuredSummary summary={structuredSummary} />
       ) : (
-        <MarkdownSummary text={summary || 'Model nie zwrocil jeszcze podsumowania w zapisanym schemacie.'} />
+        <MarkdownSummary text={summary || 'Model nie zwrócił jeszcze podsumowania w zapisanym schemacie.'} />
       )}
     </div>
   );
@@ -1026,53 +1076,8 @@ const findMetricSpec = (label, specs) => {
 };
 
 const getMetricPeriodInfo = (period) => {
-  const text = String(period || 'Okres niepodany');
-  const normalized = normalizeText(text);
-  const isoDate = text.match(/\b((?:19|20)\d{2})[-/.](0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])\b/);
-  const plDate = text.match(/\b(0?[1-9]|[12]\d|3[01])[-/.](0?[1-9]|1[0-2])[-/.]((?:19|20)\d{2})\b/);
-  const dateParts = isoDate
-    ? { year: Number(isoDate[1]), month: Number(isoDate[2]), day: Number(isoDate[3]) }
-    : plDate
-      ? { year: Number(plDate[3]), month: Number(plDate[2]), day: Number(plDate[1]) }
-      : null;
-  const quarterEnd = dateParts && {
-    '3-31': 1,
-    '6-30': 2,
-    '9-30': 3,
-    '12-31': 4,
-  }[`${dateParts.month}-${dateParts.day}`];
-  if (quarterEnd) {
-    return {
-      key: `Q:${dateParts.year}:${quarterEnd}`,
-      label: `Q${quarterEnd} ${dateParts.year}`,
-      year: dateParts.year,
-      quarter: quarterEnd,
-      isQuarter: true,
-      isSynthetic: false,
-    };
-  }
-
-  const year = Number((text.match(/(?:19|20)\d{2}/) || [])[0]) || null;
-  const romanQuarter = normalized.match(/(?:^|[^a-z0-9])(i{1,3}|iv)(?:kw|kwartal)/)?.[1];
-  const quarter = Number((normalized.match(/q([1-4])/) || normalized.match(/([1-4])q/) || normalized.match(/([1-4])kw/))?.[1])
-    || ({ i: 1, ii: 2, iii: 3, iv: 4 }[romanQuarter] || null);
-  if (year && quarter) {
-    return {
-      key: `Q:${year}:${quarter}`,
-      label: `Q${quarter} ${year}`,
-      year,
-      quarter,
-      isQuarter: true,
-      isSynthetic: false,
-    };
-  }
-
   return {
-    key: text,
-    label: text,
-    year,
-    quarter,
-    isQuarter: Boolean(year && quarter),
+    ...getReportPeriodInfo(period),
     isSynthetic: false,
   };
 };
@@ -1154,12 +1159,53 @@ const sortPeriods = (left, right) => {
   return left.label.localeCompare(right.label, 'pl');
 };
 
+const getAnalysisTime = (analysis) => {
+  const date = new Date(analysis?.approvedAt || analysis?.updatedAt || analysis?.createdAt || 0);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+};
+
+const sortAnalysesByRecency = (left, right) => (
+  getAnalysisTime(right) - getAnalysisTime(left)
+  || getAnalysisTitle(right).localeCompare(getAnalysisTitle(left), 'pl')
+);
+
+const getAnalysisReportPeriodInfo = (analysis) => {
+  const content = getAnalysisContent(analysis);
+  const period = content.reportPeriod || analysis?.reportPeriod || analysis?.period || '';
+  return period ? getMetricPeriodInfo(period) : null;
+};
+
+const buildAnalysisPeriodOptions = (analyses) => {
+  const periods = new Map();
+  analyses.forEach((analysis) => {
+    const periodInfo = getAnalysisReportPeriodInfo(analysis);
+    if (!periodInfo) return;
+    const current = periods.get(periodInfo.key);
+    if (!current || getAnalysisTime(analysis) > current.latestTime) {
+      periods.set(periodInfo.key, {
+        ...periodInfo,
+        latestTime: getAnalysisTime(analysis),
+        analysisCount: (current?.analysisCount || 0) + 1,
+      });
+    } else if (current) {
+      current.analysisCount += 1;
+    }
+  });
+  return [...periods.values()].sort(sortPeriods);
+};
+
+const getLatestAnalysisForPeriod = (analyses, periodKey) => (
+  [...analyses]
+    .filter((analysis) => getAnalysisReportPeriodInfo(analysis)?.key === periodKey)
+    .sort(sortAnalysesByRecency)[0] || null
+);
+
 const buildMetricTable = (metrics, specs, { aggregateAnnual = false } = {}) => {
   const rows = specs.map((spec) => ({ spec, values: new Map() }));
   const byLabel = new Map(rows.map((row) => [row.spec.label, row]));
   const periods = new Map();
 
-  metrics.forEach((metric, index) => {
+  (metrics || []).forEach((metric, index) => {
     const spec = findMetricSpec(getMetricLabel(metric, index), specs);
     if (!spec) return;
 
@@ -1245,10 +1291,10 @@ const FinancialMetricTable = ({ title, description, metrics, specs, aggregateAnn
                       <td key={`${row.spec.label}-${period.key}`} className="px-3 py-3 align-top text-slate-200">
                         {cell ? (
                           <div>
-                            <p className="font-mono text-sm font-semibold">{cell.display}</p>
-                            {(cell.note || cell.trend || cell.source) && (
+                            <MetricValueWithSource value={cell.display} source={cell.source} />
+                            {(cell.note || cell.trend) && (
                               <p className="mt-1 text-xs leading-5 text-slate-500">
-                                {[cell.note, cell.trend && `Trend: ${cell.trend}`, cell.source].filter(Boolean).join(' · ')}
+                                {[cell.note, cell.trend && `Trend: ${cell.trend}`].filter(Boolean).join(' · ')}
                               </p>
                             )}
                           </div>
@@ -1286,32 +1332,61 @@ const MetricMatrix = ({ metrics }) => (
   </div>
 );
 
-const buildReportMetricMatrix = (metrics, fallbackPrefix = 'metric') => {
+const buildReportMetricMatrix = (metrics, fallbackPrefix = 'metric', { includePriorityRows = false } = {}) => {
   const periods = new Map();
   const rows = new Map();
+  const priorityDefinitions = includePriorityRows ? getPriorityBankReportMetricDefinitions() : [];
+  const priorityOrder = new Map(priorityDefinitions.map((definition) => [definition.metricKey, definition.priorityIndex]));
+
+  priorityDefinitions.forEach((definition) => {
+    rows.set(definition.metricKey, {
+      key: definition.metricKey,
+      label: definition.label,
+      description: definition.description,
+      aggregation: definition.aggregation,
+      tier: definition.tier,
+      catalogIndex: definition.catalogIndex,
+      priorityIndex: definition.priorityIndex,
+      values: new Map(),
+    });
+  });
 
   metrics.forEach((metric, index) => {
     const periodInfo = getMetricPeriodInfo(metric.period);
     periods.set(periodInfo.key, periodInfo);
-    const metricKey = metric.metricKey || metric.label || `${fallbackPrefix}_${index + 1}`;
     const definition = getReportMetricDefinition(metric.metricKey) || getReportMetricDefinition(metric.label);
+    const metricKey = definition?.metricKey || metric.metricKey || metric.label || `${fallbackPrefix}_${index + 1}`;
     if (!rows.has(metricKey)) {
       rows.set(metricKey, {
         key: metricKey,
-        label: metric.label || metric.metricKey || `Metryka ${index + 1}`,
+        label: definition?.label || metric.label || metric.metricKey || `Metryka ${index + 1}`,
         description: definition?.description || '',
         aggregation: metric.aggregation || '',
+        tier: definition?.tier || 'secondary',
+        catalogIndex: definition?.catalogIndex ?? Number.POSITIVE_INFINITY,
+        priorityIndex: priorityOrder.has(metricKey) ? priorityOrder.get(metricKey) : null,
         values: new Map(),
       });
     }
     const row = rows.get(metricKey);
+    if (definition?.label) row.label = definition.label;
     if (!row.description && definition?.description) row.description = definition.description;
+    if (!row.aggregation && metric.aggregation) row.aggregation = metric.aggregation;
     row.values.set(periodInfo.key, metric);
   });
 
   return {
     periods: [...periods.values()].sort(sortPeriods),
-    rows: [...rows.values()].sort((left, right) => left.label.localeCompare(right.label, 'pl')),
+    rows: [...rows.values()].sort((left, right) => {
+      const leftTier = left.tier === 'primary' ? 0 : 1;
+      const rightTier = right.tier === 'primary' ? 0 : 1;
+      if (leftTier !== rightTier) return leftTier - rightTier;
+      const leftPriority = Number.isInteger(left.priorityIndex) ? left.priorityIndex : Number.POSITIVE_INFINITY;
+      const rightPriority = Number.isInteger(right.priorityIndex) ? right.priorityIndex : Number.POSITIVE_INFINITY;
+      if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+      if (left.catalogIndex !== right.catalogIndex) return left.catalogIndex - right.catalogIndex;
+      return left.label.localeCompare(right.label, 'pl');
+    }),
   };
 };
 
@@ -1346,7 +1421,7 @@ const ReportMetricLabel = ({ row, size = 'sm', idPrefix = 'metric' }) => {
 };
 
 const DraftMetricFactsTable = ({ metrics }) => {
-  const table = buildReportMetricMatrix(metrics, 'draft_metric');
+  const table = buildReportMetricMatrix(metrics, 'draft_metric', { includePriorityRows: true });
   if (!table.rows.length) return <EmptyState>Brak metryk w szkicu analizy.</EmptyState>;
 
   return (
@@ -1376,9 +1451,12 @@ const DraftMetricFactsTable = ({ metrics }) => {
                     <td key={`${row.key}-${period.key}`} className="px-3 py-3 align-top text-slate-200">
                       {metric ? (
                         <div>
-                          <p className="font-mono text-sm font-semibold">{formatAnalysisMetricValue(metric)}</p>
-                          {Number.isFinite(Number(metric.confidence)) && <Badge className="mt-2">pewność {formatNumber(Number(metric.confidence) * 100, 0)}%</Badge>}
-                          <SourceNote source={source} evidence={source.evidence} />
+                          <MetricValueWithSource
+                            value={formatReportMetricValue(metric, EMPTY_VALUE)}
+                            source={source}
+                            evidence={source.evidence}
+                            confidence={metric.confidence}
+                          />
                         </div>
                       ) : (
                         <span className="text-slate-600">{EMPTY_VALUE}</span>
@@ -1396,13 +1474,13 @@ const DraftMetricFactsTable = ({ metrics }) => {
 };
 
 const ApprovedReportMetricMatrix = ({ metrics }) => {
-  const table = buildReportMetricMatrix(metrics || [], 'approved_metric');
+  const table = buildReportMetricMatrix(metrics || [], 'approved_metric', { includePriorityRows: true });
 
   return (
-    <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
+    <div>
       <SectionHeading
-        title="Zatwierdzone metryki raportowe"
-        description="Trwała macierz metryk zapisana dopiero po akceptacji analizy. Każda komórka zachowuje źródło z dokumentu."
+        title="Metryki"
+        description="Jedna macierz zatwierdzonych metryk raportowych dla wszystkich zapisanych okresów. Każda komórka zachowuje źródło z dokumentu."
       />
       {table.rows.length ? (
         <div className="overflow-hidden rounded-xl border border-slate-800/80">
@@ -1430,8 +1508,12 @@ const ApprovedReportMetricMatrix = ({ metrics }) => {
                         <td key={`${row.key}-${period.key}`} className="px-3 py-3 align-top text-slate-200">
                           {metric ? (
                             <div>
-                              <p className="font-mono text-sm font-semibold">{formatAnalysisMetricValue(metric)}</p>
-                              <SourceNote source={metric.source || metric} evidence={metric.quote || metric.source?.evidence} />
+                              <MetricValueWithSource
+                                value={formatReportMetricValue(metric, EMPTY_VALUE)}
+                                source={metric.source || metric}
+                                evidence={metric.quote || metric.source?.evidence}
+                                confidence={metric.confidence}
+                              />
                             </div>
                           ) : (
                             <span className="text-slate-600">{EMPTY_VALUE}</span>
@@ -1446,7 +1528,7 @@ const ApprovedReportMetricMatrix = ({ metrics }) => {
           </div>
         </div>
       ) : <EmptyState>Brak zatwierdzonych metryk. Zaakceptuj szkic analizy, aby zapisać fakty raportowe w tabeli.</EmptyState>}
-    </section>
+    </div>
   );
 };
 
@@ -1470,9 +1552,11 @@ const SourceBackedList = ({ title, tone = 'default', items }) => {
           const evidence = isObject ? item.evidence || item.source?.evidence : '';
           return (
             <li key={`${index}-${text.slice(0, 16)}`} className={`rounded-lg border px-3 py-2 text-slate-300 ${itemClass}`}>
-              <p>{text}</p>
+              <p className="inline-flex max-w-full items-start gap-1.5">
+                <span className="min-w-0">{text}</span>
+                <SourceInlineInfo source={source} evidence={evidence} className="mt-0.5" />
+              </p>
               {isObject && item.metricKey && <p className="mt-1 font-mono text-[11px] text-slate-500">{item.metricKey}</p>}
-              <SourceNote source={source} evidence={evidence} />
             </li>
           );
         })}
@@ -1481,11 +1565,75 @@ const SourceBackedList = ({ title, tone = 'default', items }) => {
   );
 };
 
-const AnalysisPreview = ({ analysis, helperOnline, busy, onApprove }) => {
+const AnalysisPeriodSelector = ({ options = [], selectedPeriodKey, onChange }) => {
+  const [open, setOpen] = useState(false);
+  if (!options.length) return null;
+  const selected = options.find((option) => option.key === selectedPeriodKey) || options[0];
+  return (
+    <div className="relative mb-4 block max-w-xs">
+      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Okres podglądu</p>
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="mt-2 flex w-full items-center justify-between gap-3 rounded-xl border border-slate-700/80 bg-slate-950 px-3 py-2 text-left text-sm font-semibold text-slate-100 shadow-inner shadow-slate-950/50 transition-colors hover:border-blue-400/50 focus-visible:border-blue-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/25"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span>{selected?.label || 'Wybierz okres'}</span>
+        <span className={`text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`}>⌄</span>
+      </button>
+      {open && (
+        <div
+          role="listbox"
+          className="absolute left-0 top-full z-50 mt-2 max-h-64 w-full overflow-y-auto rounded-xl border border-slate-700/80 bg-slate-950 p-1 shadow-2xl shadow-slate-950/60"
+        >
+          {options.map((option) => {
+            const isSelected = option.key === selected?.key;
+            return (
+              <button
+                key={option.key}
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                onClick={() => {
+                  onChange(option.key);
+                  setOpen(false);
+                }}
+                className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition-colors ${
+                  isSelected
+                    ? 'bg-blue-500/15 font-bold text-blue-100'
+                    : 'text-slate-300 hover:bg-slate-800/80 hover:text-slate-100'
+                }`}
+              >
+                <span>{option.label}</span>
+                {isSelected && <span className="text-xs text-blue-300">wybrany</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const AnalysisPreview = ({
+  analysis,
+  reportMetrics,
+  positions,
+  periodOptions,
+  selectedPeriodKey,
+  onPeriodChange,
+  helperOnline,
+  busy,
+  onApprove,
+}) => {
   if (!analysis) {
     return (
       <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
         <SectionHeading title="Wynik analizy" description="Po uruchomieniu analizy zobaczysz szkic przed jego zapisaniem w historii." />
+        <AnalysisPeriodSelector options={periodOptions} selectedPeriodKey={selectedPeriodKey} onChange={onPeriodChange} />
+        <PositionSummaryPanel positions={positions} />
+        <ApprovedReportMetricMatrix metrics={reportMetrics} />
         <EmptyState>Brak szkicu lub zatwierdzonej analizy dla wybranych dokumentów.</EmptyState>
       </section>
     );
@@ -1494,11 +1642,11 @@ const AnalysisPreview = ({ analysis, helperOnline, busy, onApprove }) => {
   const analysisId = getItemId(analysis);
   const isDraft = String(analysis.status || '').toLowerCase() === 'draft';
   const content = getAnalysisContent(analysis);
-  const metricFacts = Array.isArray(content.metricFacts) ? content.metricFacts : [];
+  const reportPeriod = content.reportPeriod || analysis?.reportPeriod || analysis?.period || '';
+  const metricFacts = sortReportMetricFacts(filterReportMetricFactsForPeriod(content.metricFacts, reportPeriod));
   const insights = getAnalysisItems(analysis, ['conclusions', 'keyTakeaways', 'insights', 'findings']);
   const risks = getAnalysisItems(analysis, ['risks', 'riskFactors']);
   const metrics = getAnalysisItems(analysis, ['metrics', 'keyMetrics']);
-  const extractionWarnings = getAnalysisItems(analysis, ['extractionWarnings']);
   const citations = getAnalysisItems(analysis, ['sources', 'citations', 'evidence']);
   const hasV2MetricFacts = metricFacts.length > 0;
 
@@ -1518,15 +1666,25 @@ const AnalysisPreview = ({ analysis, helperOnline, busy, onApprove }) => {
         {analysis.costUsd !== undefined && <Badge>Koszt: {formatUsd(analysis.costUsd)}</Badge>}
         {analysis.documentIds?.length && <Badge>Dokumenty: {analysis.documentIds.length}</Badge>}
       </div>
+      <AnalysisPeriodSelector options={periodOptions} selectedPeriodKey={selectedPeriodKey} onChange={onPeriodChange} />
       <div className="space-y-5 text-sm leading-6 text-slate-300">
+        <PositionSummaryPanel positions={positions} />
         <SummaryPanel analysis={analysis} />
+        <ApprovedReportMetricMatrix metrics={reportMetrics} />
         <SourceBackedList title="Wnioski" items={insights} />
-        <div>
-          <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Metryki</p>
-          {hasV2MetricFacts ? <DraftMetricFactsTable metrics={metricFacts} /> : <MetricMatrix metrics={metrics} />}
-        </div>
+        {hasV2MetricFacts && isDraft && (
+          <div>
+            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Metryki ze szkicu do zatwierdzenia</p>
+            <DraftMetricFactsTable metrics={metricFacts} />
+          </div>
+        )}
+        {!hasV2MetricFacts && metrics.length > 0 && !reportMetrics?.length && (
+          <div>
+            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Metryki z analizy</p>
+            <MetricMatrix metrics={metrics} />
+          </div>
+        )}
         <SourceBackedList title="Ryzyka" tone="risk" items={risks} />
-        <SourceBackedList title="Ostrzeżenia ekstrakcji" tone="warning" items={extractionWarnings} />
         {citations.length > 0 && (
           <div>
             <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Dowody i źródła</p>
@@ -1612,6 +1770,78 @@ const SettingsIcon = () => (
     <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06A2 2 0 1 1 7.04 4.3l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.31.45.99 1.51 1H21a2 2 0 0 1 0 4h-.09A1.65 1.65 0 0 0 19.4 15Z" />
   </svg>
 );
+
+const WarningTriangleIcon = () => (
+  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M10.3 4.4 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 4.4a2 2 0 0 0-3.4 0Z" />
+    <path d="M12 9v4" />
+    <path d="M12 17h.01" />
+  </svg>
+);
+
+const ExtractionWarningsButton = ({ warnings }) => {
+  const [open, setOpen] = useState(false);
+  if (!warnings?.length) return null;
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-200 shadow-lg shadow-slate-950/30 transition-colors hover:border-amber-300/60 hover:bg-amber-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/35"
+        aria-label={`Ostrzeżenia ekstrakcji: ${warnings.length}`}
+        title="Ostrzeżenia ekstrakcji"
+      >
+        <WarningTriangleIcon />
+        <span className="absolute -mt-8 ml-7 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-400 px-1 text-[10px] font-bold leading-none text-slate-950">
+          {warnings.length}
+        </span>
+      </button>
+      {open && createPortal(
+        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+          <div className="max-h-[calc(100vh-3rem)] w-full max-w-3xl overflow-y-auto rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-2xl shadow-slate-950/70">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-amber-300">Ostrzeżenia ekstrakcji</p>
+                <h3 className="mt-1 text-lg font-bold text-white">Co model uznał za niepewne</h3>
+                <p className="mt-2 text-sm leading-6 text-slate-400">
+                  Te informacje nie blokują podglądu analizy, ale pokazują gdzie OCR, nagłówki tabel albo jednostki były zbyt niejednoznaczne dla pewnego odczytu.
+                </p>
+              </div>
+              <ActionButton className="border border-slate-700/70 bg-slate-800/60 px-2.5 py-1.5 text-slate-300 hover:bg-slate-800" onClick={() => setOpen(false)}>
+                Zamknij
+              </ActionButton>
+            </div>
+            <div className="space-y-3">
+              {warnings.map((warning, index) => {
+                const isObject = warning && typeof warning === 'object';
+                const label = isObject ? warning.label || warning.metricKey || `Ostrzezenie ${index + 1}` : `Ostrzezenie ${index + 1}`;
+                const metricKey = isObject ? warning.metricKey : '';
+                const reason = isObject ? warning.reason || warning.text || warning.value || '' : String(warning);
+                const source = isObject ? warning.source || {} : {};
+                const evidence = isObject ? warning.evidence || warning.source?.evidence || warning.quote || '' : '';
+                return (
+                  <div key={`${index}-${String(label).slice(0, 16)}`} className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-bold text-amber-100">{label}</p>
+                      {metricKey && <Badge>{metricKey}</Badge>}
+                    </div>
+                    {reason && (
+                      <p className="mt-2 inline-flex max-w-full items-start gap-1.5 text-sm leading-6 text-slate-300">
+                        <span className="min-w-0">{reason}</span>
+                        <SourceInlineInfo source={source} evidence={evidence} className="mt-1" />
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+};
 
 const AnalysisHistory = ({ analyses, activeAnalysisId, helperOnline, busy, onSelect, onRenameRequest, onDeleteRequest }) => (
   <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
@@ -1820,18 +2050,25 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
   const [analysisDialog, setAnalysisDialog] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedAnalysisId, setSelectedAnalysisId] = useState('');
+  const [selectedPeriodKey, setSelectedPeriodKey] = useState('');
 
   const helperOnline = helperStatus === 'online';
   const profile = detail.profile || fallbackProfile;
   const sources = detail.sources.length ? detail.sources : profile.sources || [];
-  const defaultAnalysis = detail.analyses.find((analysis) => String(analysis.status || '').toLowerCase() === 'draft')
-    || detail.analyses.find((analysis) => String(analysis.status || '').toLowerCase() === 'approved')
-    || detail.analyses[0]
+  const periodOptions = useMemo(() => buildAnalysisPeriodOptions(detail.analyses), [detail.analyses]);
+  const effectiveSelectedPeriodKey = periodOptions.some((period) => period.key === selectedPeriodKey)
+    ? selectedPeriodKey
+    : periodOptions[0]?.key || '';
+  const selectedAnalysis = detail.analyses.find((analysis) => getItemId(analysis) === selectedAnalysisId) || null;
+  const periodAnalysis = effectiveSelectedPeriodKey ? getLatestAnalysisForPeriod(detail.analyses, effectiveSelectedPeriodKey) : null;
+  const defaultAnalysis = periodAnalysis
+    || [...detail.analyses].sort(sortAnalysesByRecency)[0]
     || profile.latestAnalysis
     || null;
-  const activeAnalysis = detail.analyses.find((analysis) => getItemId(analysis) === selectedAnalysisId)
-    || defaultAnalysis;
+  const activeAnalysis = selectedAnalysis || defaultAnalysis;
   const activeAnalysisId = getItemId(activeAnalysis);
+  const activePeriodKey = getAnalysisReportPeriodInfo(activeAnalysis)?.key || effectiveSelectedPeriodKey;
+  const activeExtractionWarnings = getAnalysisItems(activeAnalysis, ['extractionWarnings']);
 
   const refreshDetail = useCallback(async () => {
     if (!helperOnline) return;
@@ -1938,7 +2175,14 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
   );
 
   const runAnalysis = () => perform(
-    () => analysisApi.runAnalysis(assetId, { documentIds: selectedDocumentIds, model: 'sonar-pro' }),
+    async () => {
+      const result = await analysisApi.runAnalysis(assetId, { documentIds: selectedDocumentIds, model: 'sonar-pro' });
+      const nextAnalysisId = getItemId(result);
+      const nextPeriodKey = getAnalysisReportPeriodInfo(result)?.key || '';
+      if (nextAnalysisId) setSelectedAnalysisId(nextAnalysisId);
+      if (nextPeriodKey) setSelectedPeriodKey(nextPeriodKey);
+      return result;
+    },
     'Powstał szkic analizy. Sprawdź go przed zapisaniem.',
     'Wysyłam zaznaczone dokumenty do analizy i czekam na szkic...',
   );
@@ -1984,25 +2228,30 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
     <div className="mx-auto max-w-7xl p-8 animate-fadeIn">
       <div className="mb-8">
         <Link to="/analysis" className="inline-flex items-center gap-2 text-xs font-semibold text-slate-400 transition-colors hover:text-blue-300">← Wszystkie aktywa</Link>
-        <div className="mt-4 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="mt-4">
           <div className="min-w-0">
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <Badge>{getAnalysisTypeLabel(profile.type)}</Badge>
               {profile.isPilot && <Badge>profil pilota</Badge>}
               {helperOnline ? <Badge status="online">helper online</Badge> : <Badge status="offline">helper offline</Badge>}
             </div>
-            <h1 className="text-3xl font-bold text-white">{profile.name}</h1>
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-3xl font-bold text-white">{profile.name}</h1>
+              <div className="flex shrink-0 items-center gap-2">
+                <ExtractionWarningsButton warnings={activeExtractionWarnings} />
+                <button
+                  type="button"
+                  onClick={() => setSettingsOpen(true)}
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-700/70 bg-slate-900 text-slate-300 shadow-lg shadow-slate-950/30 transition-colors hover:border-blue-400/50 hover:bg-slate-800 hover:text-blue-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/35"
+                  aria-label="Otworz konfiguracje analizy"
+                  title="Konfiguracja analizy"
+                >
+                  <SettingsIcon />
+                </button>
+              </div>
+            </div>
             <p className="mt-2 font-mono text-sm text-slate-500">{identifier || assetId}</p>
           </div>
-          <button
-            type="button"
-            onClick={() => setSettingsOpen(true)}
-            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-700/70 bg-slate-900 text-slate-300 shadow-lg shadow-slate-950/30 transition-colors hover:border-blue-400/50 hover:bg-slate-800 hover:text-blue-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/35"
-            aria-label="Otwórz konfigurację analizy"
-            title="Konfiguracja analizy"
-          >
-            <SettingsIcon />
-          </button>
         </div>
       </div>
 
@@ -2042,7 +2291,10 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
         onExport={onExport}
         onImport={onImport}
         onSelectAnalysis={(analysisId) => {
+          const selected = detail.analyses.find((analysis) => getItemId(analysis) === analysisId);
+          const selectedPeriod = getAnalysisReportPeriodInfo(selected)?.key || '';
           setSelectedAnalysisId(analysisId);
+          if (selectedPeriod) setSelectedPeriodKey(selectedPeriod);
           setSettingsOpen(false);
         }}
         onRenameAnalysis={(analysis) => setAnalysisDialog({ mode: 'rename', analysis })}
@@ -2062,15 +2314,20 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
       )}
 
       <div className="space-y-6">
-        <AnalysisPreview analysis={activeAnalysis} helperOnline={helperOnline} busy={busy} onApprove={approveAnalysis} />
-        <ApprovedReportMetricMatrix metrics={detail.reportMetrics} />
-        <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
-          <SectionHeading
-            title="Bieżąca pozycja"
-            description="Wycena pochodzi wyłącznie z zaimportowanych danych portfela; nie jest pobierana przez Perplexity."
-          />
-          <PositionSummary positions={profile.positions || fallbackProfile.positions} />
-        </section>
+        <AnalysisPreview
+          analysis={activeAnalysis}
+          reportMetrics={detail.reportMetrics}
+          positions={profile.positions || fallbackProfile.positions}
+          periodOptions={periodOptions}
+          selectedPeriodKey={activePeriodKey}
+          onPeriodChange={(periodKey) => {
+            setSelectedPeriodKey(periodKey);
+            setSelectedAnalysisId('');
+          }}
+          helperOnline={helperOnline}
+          busy={busy}
+          onApprove={approveAnalysis}
+        />
         <SecondOpinion profile={profile} />
       </div>
     </div>

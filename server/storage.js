@@ -32,7 +32,12 @@ import {
   sha256,
   stringOrEmpty,
 } from './utils.js';
-import { findReportMetricSpec, normalizeMetricText } from './analysisMetricCatalog.js';
+import {
+  findReportMetricSpec,
+  metricUnitMatchesValueType,
+  normalizeMetricText,
+} from './analysisMetricCatalog.js';
+import { normalizeReportPeriod } from '../shared/reportPeriods.js';
 import { createStoredZip, extractZipSafely, inspectZip } from './zip.js';
 
 const DATA_VERSION = 1;
@@ -287,30 +292,6 @@ const normalizeConfidence = (value) => {
   return Math.min(1, Math.max(0, number));
 };
 
-const normalizeReportMetricPeriod = (period) => {
-  const text = stringOrEmpty(period);
-  if (!text) return '';
-
-  const isoDate = text.match(/\b((?:19|20)\d{2})[-/.](0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])\b/);
-  const plDate = text.match(/\b(0?[1-9]|[12]\d|3[01])[-/.](0?[1-9]|1[0-2])[-/.]((?:19|20)\d{2})\b/);
-  const dateParts = isoDate
-    ? { year: Number(isoDate[1]), month: Number(isoDate[2]), day: Number(isoDate[3]) }
-    : plDate
-      ? { year: Number(plDate[3]), month: Number(plDate[2]), day: Number(plDate[1]) }
-      : null;
-  const quarterEnd = dateParts && {
-    '3-31': 1,
-    '6-30': 2,
-    '9-30': 3,
-    '12-31': 4,
-  }[`${dateParts.month}-${dateParts.day}`];
-  if (quarterEnd) return `Q${quarterEnd} ${dateParts.year}`;
-
-  const year = Number((text.match(/(?:19|20)\d{2}/) || [])[0]) || null;
-  const quarter = Number((text.match(/q([1-4])/i) || text.match(/([1-4])q/i) || text.match(/([1-4])\s*(?:kw|kwartal)/i))?.[1]) || null;
-  return year && quarter ? `Q${quarter} ${year}` : text;
-};
-
 const metricFactDocumentId = (fact, documentIds) => (
   stringOrEmpty(fact?.documentId)
   || stringOrEmpty(fact?.document_id)
@@ -318,20 +299,54 @@ const metricFactDocumentId = (fact, documentIds) => (
   || (documentIds.length === 1 ? documentIds[0] : '')
 );
 
-const moneyAmountInPln = (metric) => {
+const moneyAmount = (metric) => {
   const value = asFiniteNumber(metric?.valueNumeric, null);
   if (value === null) return null;
+  const rawUnit = stringOrEmpty(metric?.unit);
   const unit = normalizeMetricText(metric?.unit);
-  if (!unit || (!unit.includes('pln') && !unit.includes('zl'))) return null;
+  if (!unit) return null;
   if (unit.includes('akcj') || unit.includes('share')) return null;
-  if (unit.includes('mln') || unit.includes('million')) return value * 1_000_000;
-  if (unit.includes('tys') || unit.includes('thousand')) return value * 1_000;
-  return value;
+
+  const currency = [
+    ['PLN', /\b(?:pln|zl)\b/],
+    ['EUR', /\beur\b/],
+    ['USD', /\busd\b/],
+    ['GBP', /\bgbp\b/],
+    ['CHF', /\bchf\b/],
+  ].find(([, pattern]) => pattern.test(unit))?.[0]
+    || (rawUnit.includes('€') ? 'EUR' : '')
+    || (rawUnit.includes('£') ? 'GBP' : '')
+    || (rawUnit.includes('$') ? 'USD' : '');
+  if (!currency) return null;
+
+  const scale = unit.includes('mld') || unit.includes('billion') || /\bbn\b/.test(unit)
+    ? 1_000_000_000
+    : unit.includes('mln') || unit.includes('million')
+      ? 1_000_000
+      : unit.includes('tys') || unit.includes('thousand')
+        ? 1_000
+        : 1;
+
+  return { amount: value * scale, currency };
 };
 
-const bestMetricForKey = (rows, metricKey) => rows
-  .filter((metric) => metric.metricKey === metricKey && moneyAmountInPln(metric) !== null)
-  .sort((left, right) => (Number(right.confidence || 0) - Number(left.confidence || 0)))[0] || null;
+const bestComparableMoneyPair = (rows, leftKey, rightKey) => {
+  const candidatesFor = (metricKey) => rows
+    .filter((metric) => metric.metricKey === metricKey)
+    .map((metric) => ({ metric, money: moneyAmount(metric) }))
+    .filter((candidate) => candidate.money);
+  const pairs = candidatesFor(leftKey).flatMap((left) => (
+    candidatesFor(rightKey)
+      .filter((right) => right.money.currency === left.money.currency)
+      .map((right) => ({ left, right }))
+  ));
+
+  return pairs.sort((a, b) => {
+    const aConfidence = Math.min(Number(a.left.metric.confidence || 0), Number(a.right.metric.confidence || 0));
+    const bConfidence = Math.min(Number(b.left.metric.confidence || 0), Number(b.right.metric.confidence || 0));
+    return bConfidence - aConfidence;
+  })[0] || null;
+};
 
 const derivedDividendNetProfitRows = (rows, analysis, timestamp) => {
   const dividendRatioSpec = findReportMetricSpec('dividend_net_profit_ratio');
@@ -339,13 +354,13 @@ const derivedDividendNetProfitRows = (rows, analysis, timestamp) => {
 
   return periods.flatMap((period) => {
     const periodRows = rows.filter((metric) => metric.period === period);
-    const dividend = bestMetricForKey(periodRows, 'dividend_amount');
-    const netIncome = bestMetricForKey(periodRows, 'net_income');
-    if (!dividend || !netIncome) return [];
-
-    const dividendAmount = moneyAmountInPln(dividend);
-    const netIncomeAmount = moneyAmountInPln(netIncome);
-    if (dividendAmount === null || netIncomeAmount === null || dividendAmount < 0 || netIncomeAmount <= 0) return [];
+    const pair = bestComparableMoneyPair(periodRows, 'dividend_amount', 'net_income');
+    if (!pair) return [];
+    const dividend = pair.left.metric;
+    const netIncome = pair.right.metric;
+    const dividendAmount = pair.left.money.amount;
+    const netIncomeAmount = pair.right.money.amount;
+    if (dividendAmount < 0 || netIncomeAmount <= 0) return [];
 
     const value = Number(((dividendAmount / netIncomeAmount) * 100).toFixed(2));
     const sharedDocumentId = dividend.documentId && dividend.documentId === netIncome.documentId ? dividend.documentId : '';
@@ -358,7 +373,7 @@ const derivedDividendNetProfitRows = (rows, analysis, timestamp) => {
       documentId: sharedDocumentId,
       page: null,
       section: 'Wyliczenie aplikacji',
-      evidence: 'Wyliczone z zatwierdzonych metryk: dywidenda / zysk netto * 100.',
+      evidence: `Wyliczone z zatwierdzonych metryk w walucie ${pair.left.money.currency}: dywidenda / zysk netto * 100.`,
       inputs: [
         { metricKey: dividend.metricKey, label: dividend.label, value: dividend.valueNumeric, unit: dividend.unit, period: dividend.period, documentId: dividend.documentId },
         { metricKey: netIncome.metricKey, label: netIncome.label, value: netIncome.valueNumeric, unit: netIncome.unit, period: netIncome.period, documentId: netIncome.documentId },
@@ -393,18 +408,28 @@ const approvedMetricRowsFromAnalysis = (analysis, timestamp) => {
   const content = parseJson(analysis.content_json, {});
   const documentIds = parseJson(analysis.document_ids_json, []);
   const facts = Array.isArray(content.metricFacts) ? content.metricFacts : [];
+  const reportPeriod = normalizeReportPeriod(content.reportPeriod);
 
   const directRows = facts.flatMap((fact) => {
     if (!fact || typeof fact !== 'object' || Array.isArray(fact)) return [];
     const spec = findReportMetricSpec(fact.metricKey) || findReportMetricSpec(fact.label);
     const metricKey = stringOrEmpty(fact.metricKey) || spec?.metricKey || '';
     if (metricKey === 'dividend_net_profit_ratio' || spec?.metricKey === 'dividend_net_profit_ratio') return [];
-    const period = normalizeReportMetricPeriod(fact.period) || normalizeReportMetricPeriod(content.reportPeriod);
+    const factPeriod = normalizeReportPeriod(fact.period);
+    if (reportPeriod && factPeriod && factPeriod !== reportPeriod) return [];
+    const period = reportPeriod || factPeriod;
     if (!metricKey || !period || !hasOwn(fact, 'value')) return [];
+    const valueNumeric = asFiniteNumber(
+      typeof fact.value === 'string' ? fact.value.replace(/\s+/g, '').replace(',', '.') : fact.value,
+      null,
+    );
+    if (spec && fact.value !== null && fact.value !== undefined
+      && !metricUnitMatchesValueType(fact.unit, spec.valueType)) return [];
+    if (spec?.valueType === 'money' && valueNumeric !== null
+      && Number.isInteger(valueNumeric) && !Number.isSafeInteger(valueNumeric)) return [];
 
     const documentId = metricFactDocumentId(fact, documentIds);
     const page = normalizePage(fact.page);
-    const valueNumeric = asFiniteNumber(fact.value, null);
     const source = {
       documentId,
       page,
@@ -435,9 +460,17 @@ const approvedMetricRowsFromAnalysis = (analysis, timestamp) => {
     }];
   });
 
+  const uniqueRows = new Map();
+  directRows.forEach((row) => {
+    const key = `${row.metricKey}\u0000${row.period}`;
+    const current = uniqueRows.get(key);
+    if (!current || Number(row.confidence || 0) > Number(current.confidence || 0)) uniqueRows.set(key, row);
+  });
+  const selectedRows = [...uniqueRows.values()];
+
   return [
-    ...directRows,
-    ...derivedDividendNetProfitRows(directRows, analysis, timestamp),
+    ...selectedRows,
+    ...derivedDividendNetProfitRows(selectedRows, analysis, timestamp),
   ];
 };
 
@@ -498,6 +531,7 @@ export class AnalysisStore {
     this.openDatabase();
     this.initializeSchema();
     this.seedPilotProfiles();
+    this.rebuildApprovedReportMetrics();
     return this;
   }
 
@@ -609,7 +643,7 @@ export class AnalysisStore {
         approved_at TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        UNIQUE(asset_id, metric_key, period, document_id)
+        UNIQUE(asset_id, metric_key, period)
       );
       CREATE TABLE IF NOT EXISTS budget_settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -636,11 +670,33 @@ export class AnalysisStore {
       CREATE INDEX IF NOT EXISTS idx_approved_report_metrics_analysis ON approved_report_metrics(analysis_id);
       CREATE INDEX IF NOT EXISTS idx_usage_month ON api_usage(month);
     `);
+    this.migrateApprovedReportMetricUniqueness();
     const current = this.db.prepare('SELECT id FROM budget_settings WHERE id = 1').get();
     if (!current) {
       this.db.prepare('INSERT INTO budget_settings (id, monthly_limit_usd, updated_at) VALUES (1, ?, ?)')
         .run(DEFAULT_BUDGET_USD, nowIso(this.clock));
     }
+  }
+
+  migrateApprovedReportMetricUniqueness() {
+    this.db.exec(`
+      DELETE FROM approved_report_metrics
+      WHERE id NOT IN (
+        SELECT id
+        FROM (
+          SELECT
+            id,
+            ROW_NUMBER() OVER (
+              PARTITION BY asset_id, metric_key, period
+              ORDER BY approved_at DESC, updated_at DESC, created_at DESC, id DESC
+            ) AS row_number
+          FROM approved_report_metrics
+        )
+        WHERE row_number = 1
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_approved_report_metrics_asset_metric_period
+        ON approved_report_metrics(asset_id, metric_key, period);
+    `);
   }
 
   seedPilotProfiles() {
@@ -1074,6 +1130,90 @@ export class AnalysisStore {
     `).all(assetId).map(mapApprovedReportMetric);
   }
 
+  upsertApprovedReportMetric(metric) {
+    this.db.prepare(`
+      INSERT INTO approved_report_metrics
+        (id, asset_id, analysis_id, document_id, metric_key, label, value_json, value_numeric, unit, period, page, section, quote, confidence, aggregation, source_json, approved_at, created_at, updated_at)
+      VALUES
+        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(asset_id, metric_key, period) DO UPDATE SET
+        id = excluded.id,
+        analysis_id = excluded.analysis_id,
+        document_id = excluded.document_id,
+        label = excluded.label,
+        value_json = excluded.value_json,
+        value_numeric = excluded.value_numeric,
+        unit = excluded.unit,
+        page = excluded.page,
+        section = excluded.section,
+        quote = excluded.quote,
+        confidence = excluded.confidence,
+        aggregation = excluded.aggregation,
+        source_json = excluded.source_json,
+        approved_at = excluded.approved_at,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at
+    `).run(
+      metric.id,
+      metric.assetId,
+      metric.analysisId,
+      metric.documentId,
+      metric.metricKey,
+      metric.label,
+      metric.valueJson,
+      metric.valueNumeric,
+      metric.unit,
+      metric.period,
+      metric.page,
+      metric.section,
+      metric.quote,
+      metric.confidence,
+      metric.aggregation,
+      metric.sourceJson,
+      metric.approvedAt,
+      metric.createdAt,
+      metric.updatedAt,
+    );
+  }
+
+  rebuildApprovedReportMetricsForAsset(assetId, fallbackTimestamp = nowIso(this.clock)) {
+    this.ensureProfileExists(assetId);
+    const analyses = this.db.prepare(`
+      SELECT *
+      FROM analyses
+      WHERE asset_id = ? AND status = 'approved'
+      ORDER BY COALESCE(approved_at, updated_at, created_at) ASC, created_at ASC, id ASC
+    `).all(assetId);
+    this.db.prepare('DELETE FROM approved_report_metrics WHERE asset_id = ?').run(assetId);
+    analyses.forEach((analysis) => {
+      const approvedAt = analysis.approved_at || analysis.updated_at || analysis.created_at || fallbackTimestamp;
+      approvedMetricRowsFromAnalysis(analysis, approvedAt).forEach((metric) => {
+        this.upsertApprovedReportMetric(metric);
+      });
+    });
+  }
+
+  rebuildApprovedReportMetrics(fallbackTimestamp = nowIso(this.clock)) {
+    const assetIds = this.db.prepare(`
+      SELECT DISTINCT asset_id
+      FROM analyses
+      WHERE status = 'approved'
+      ORDER BY asset_id
+    `).all().map((row) => row.asset_id);
+
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('DELETE FROM approved_report_metrics').run();
+      assetIds.forEach((assetId) => {
+        this.rebuildApprovedReportMetricsForAsset(assetId, fallbackTimestamp);
+      });
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
   getAnalysis(analysisId) {
     const analysis = this.db.prepare('SELECT * FROM analyses WHERE id = ?').get(analysisId);
     if (!analysis) throw new AppError('ANALYSIS_NOT_FOUND', 'Analiza nie istnieje.', 404);
@@ -1109,54 +1249,11 @@ export class AnalysisStore {
   approveAnalysis(analysisId) {
     const analysis = this.getAnalysis(analysisId);
     const timestamp = nowIso(this.clock);
-    const approvedMetrics = approvedMetricRowsFromAnalysis(analysis, timestamp);
-    const upsertMetric = this.db.prepare(`
-      INSERT INTO approved_report_metrics
-        (id, asset_id, analysis_id, document_id, metric_key, label, value_json, value_numeric, unit, period, page, section, quote, confidence, aggregation, source_json, approved_at, created_at, updated_at)
-      VALUES
-        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(asset_id, metric_key, period, document_id) DO UPDATE SET
-        analysis_id = excluded.analysis_id,
-        label = excluded.label,
-        value_json = excluded.value_json,
-        value_numeric = excluded.value_numeric,
-        unit = excluded.unit,
-        page = excluded.page,
-        section = excluded.section,
-        quote = excluded.quote,
-        confidence = excluded.confidence,
-        aggregation = excluded.aggregation,
-        source_json = excluded.source_json,
-        approved_at = excluded.approved_at,
-        updated_at = excluded.updated_at
-    `);
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.db.prepare('UPDATE analyses SET status = ?, approved_at = ?, updated_at = ? WHERE id = ?')
         .run('approved', timestamp, timestamp, analysis.id);
-      approvedMetrics.forEach((metric) => {
-        upsertMetric.run(
-          metric.id,
-          metric.assetId,
-          metric.analysisId,
-          metric.documentId,
-          metric.metricKey,
-          metric.label,
-          metric.valueJson,
-          metric.valueNumeric,
-          metric.unit,
-          metric.period,
-          metric.page,
-          metric.section,
-          metric.quote,
-          metric.confidence,
-          metric.aggregation,
-          metric.sourceJson,
-          metric.approvedAt,
-          metric.createdAt,
-          metric.updatedAt,
-        );
-      });
+      this.rebuildApprovedReportMetricsForAsset(analysis.asset_id, timestamp);
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');
@@ -1180,7 +1277,17 @@ export class AnalysisStore {
 
   deleteAnalysis(analysisId) {
     const analysis = this.getAnalysis(analysisId);
-    this.db.prepare('DELETE FROM analyses WHERE id = ?').run(analysis.id);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('DELETE FROM analyses WHERE id = ?').run(analysis.id);
+      if (String(analysis.status || '').toLowerCase() === 'approved') {
+        this.rebuildApprovedReportMetricsForAsset(analysis.asset_id);
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
     return { deleted: true, id: analysis.id, analysisId: analysis.id, assetId: analysis.asset_id };
   }
 

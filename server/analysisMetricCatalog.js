@@ -3,6 +3,21 @@ const METRIC_CATEGORY_BANK = 'bank';
 
 export const ANALYSIS_V2_SCHEMA_VERSION = '2.0';
 
+export const PRIORITY_BANK_REPORT_METRIC_KEYS = [
+  'net_income',
+  'net_interest_income',
+  'net_fee_commission_income',
+  'roe',
+  'roa',
+  'cost_income_ratio',
+  'npl_ratio',
+  'cost_of_risk',
+  'tcr',
+  'loan_deposit_ratio',
+  'eps',
+  'dividend_net_profit_ratio',
+];
+
 const metric = ({
   metricKey,
   label,
@@ -25,7 +40,7 @@ const metric = ({
   keywords,
 });
 
-export const COMMON_REPORT_METRICS = [
+const COMMON_REPORT_METRIC_BASE = [
   metric({
     metricKey: 'net_income',
     label: 'Zysk netto',
@@ -103,12 +118,111 @@ export const COMMON_REPORT_METRICS = [
     aliases: ['Rentownosc aktywow', 'Return on assets', 'ROA ratio'],
     keywords: ['wybrane wskazniki finansowe', 'rentownosc'],
   }),
+  metric({
+    metricKey: 'roic',
+    label: 'ROIC',
+    category: METRIC_CATEGORY_COMMON,
+    valueType: 'percent',
+    defaultUnit: '%',
+    aggregation: 'point_in_time',
+    description: 'Return on Invested Capital: rentownosc kapitalu zaangazowanego w dzialalnosc operacyjna.',
+    aliases: ['Rentownosc zainwestowanego kapitalu', 'Return on Invested Capital'],
+    keywords: ['rentownosc kapitalu', 'kapital zainwestowany', 'invested capital'],
+  }),
+  metric({
+    metricKey: 'gross_margin',
+    label: 'Marża brutto',
+    category: METRIC_CATEGORY_COMMON,
+    valueType: 'percent',
+    defaultUnit: '%',
+    aggregation: 'point_in_time',
+    description: 'Marza brutto pokazujaca relacje zysku brutto ze sprzedazy do przychodow ze sprzedazy.',
+    aliases: ['Marza brutto na sprzedazy', 'Gross margin', 'Gross profit margin'],
+    keywords: ['rentownosc sprzedazy', 'zysk brutto ze sprzedazy'],
+  }),
+  metric({
+    metricKey: 'operating_margin',
+    label: 'Marża operacyjna',
+    category: METRIC_CATEGORY_COMMON,
+    valueType: 'percent',
+    defaultUnit: '%',
+    aggregation: 'point_in_time',
+    description: 'Marza operacyjna pokazujaca udzial wyniku operacyjnego w przychodach ze sprzedazy.',
+    aliases: ['Marza EBIT', 'Operating margin', 'EBIT margin'],
+    keywords: ['wynik operacyjny', 'rentownosc operacyjna', 'EBIT'],
+  }),
+  metric({
+    metricKey: 'net_margin',
+    label: 'Marża netto',
+    category: METRIC_CATEGORY_COMMON,
+    valueType: 'percent',
+    defaultUnit: '%',
+    aggregation: 'point_in_time',
+    description: 'Marza netto pokazujaca jaka czesc przychodow pozostaje jako wynik netto po wszystkich kosztach i podatkach.',
+    aliases: ['Rentownosc netto sprzedazy', 'Net margin', 'Net profit margin'],
+    keywords: ['wynik netto', 'rentownosc sprzedazy'],
+  }),
+  metric({
+    metricKey: 'net_debt_ebitda',
+    label: 'Net Debt / EBITDA',
+    category: METRIC_CATEGORY_COMMON,
+    valueType: 'ratio',
+    defaultUnit: 'x',
+    aggregation: 'point_in_time',
+    description: 'Relacja dlugu netto do EBITDA, uzywana do oceny poziomu zadluzenia wzgledem wyniku operacyjnego.',
+    aliases: ['Dlug netto / EBITDA', 'Dług netto do EBITDA', 'Net debt to EBITDA'],
+    keywords: ['zadluzenie', 'dlug netto', 'EBITDA'],
+  }),
+  metric({
+    metricKey: 'current_ratio',
+    label: 'Current Ratio',
+    category: METRIC_CATEGORY_COMMON,
+    valueType: 'ratio',
+    defaultUnit: 'x',
+    aggregation: 'point_in_time',
+    description: 'Wskaznik plynnosci biezacej porownujacy aktywa obrotowe ze zobowiazaniami krotkoterminowymi.',
+    aliases: ['Wskaznik plynnosci biezacej', 'Wskaźnik płynności bieżącej', 'Current liquidity ratio'],
+    keywords: ['plynnosc', 'aktywa obrotowe', 'zobowiazania krotkoterminowe'],
+  }),
+  metric({
+    metricKey: 'quick_ratio',
+    label: 'Quick Ratio',
+    category: METRIC_CATEGORY_COMMON,
+    valueType: 'ratio',
+    defaultUnit: 'x',
+    aggregation: 'point_in_time',
+    description: 'Wskaznik plynnosci szybkiej mierzacy zdolnosc do pokrycia zobowiazan bez sprzedazy zapasow.',
+    aliases: ['Wskaznik plynnosci szybkiej', 'Wskaźnik płynności szybkiej', 'Acid-test ratio'],
+    keywords: ['plynnosc szybka', 'aktywa plynne', 'zobowiazania krotkoterminowe'],
+  }),
+  metric({
+    metricKey: 'free_cash_flow',
+    label: 'FCF',
+    category: METRIC_CATEGORY_COMMON,
+    valueType: 'money',
+    defaultUnit: 'tys. PLN',
+    aggregation: 'sum',
+    description: 'Free Cash Flow: srodki pieniezne pozostajace po wydatkach operacyjnych i nakladach inwestycyjnych.',
+    aliases: ['Wolne przeplywy pieniezne', 'Wolne przepływy pieniężne', 'Free Cash Flow'],
+    keywords: ['przeplywy operacyjne', 'naklady inwestycyjne', 'capex'],
+  }),
+  metric({
+    metricKey: 'dividend_per_share',
+    label: 'DPS',
+    category: METRIC_CATEGORY_COMMON,
+    valueType: 'money_per_share',
+    defaultUnit: 'PLN/akcje',
+    aggregation: 'sum',
+    description: 'Dividend per Share: kwota dywidendy przypadajaca na jedna akcje za wskazany okres lub rok.',
+    aliases: ['Dywidenda na akcje', 'Dywidenda na akcję', 'Dividend per Share'],
+    keywords: ['dywidenda', 'akcja', 'dividend per share'],
+  }),
 ];
 
-export const BANK_REPORT_METRICS = [
+const BANK_REPORT_METRIC_BASE = [
   metric({
     metricKey: 'net_interest_income',
-    label: 'Wynik z tytulu odsetek',
+    label: 'Wynik z tytułu odsetek',
     category: METRIC_CATEGORY_BANK,
     valueType: 'money',
     defaultUnit: 'tys. PLN',
@@ -119,7 +233,7 @@ export const BANK_REPORT_METRICS = [
   }),
   metric({
     metricKey: 'net_fee_commission_income',
-    label: 'Wynik z oplat i prowizji',
+    label: 'Wynik z opłat i prowizji',
     category: METRIC_CATEGORY_BANK,
     valueType: 'money',
     defaultUnit: 'tys. PLN',
@@ -143,12 +257,12 @@ export const BANK_REPORT_METRICS = [
     metricKey: 'cost_of_risk',
     label: 'CoR',
     category: METRIC_CATEGORY_BANK,
-    valueType: 'percent_or_money',
+    valueType: 'percent',
     defaultUnit: '%',
-    aggregation: 'sum',
-    description: 'Cost of Risk: koszt ryzyka kredytowego, najczesciej relacja odpisow kredytowych do sredniego portfela kredytowego.',
-    aliases: ['Koszt ryzyka', 'Cost of risk', 'Cost of Risk ratio', 'COR', 'Wskaznik kosztu ryzyka', 'Wynik z tytulu oczekiwanych strat kredytowych', 'Odpisy aktualizujace', 'Koszty ryzyka prawnego'],
-    keywords: ['oczekiwane straty kredytowe', 'ECL', 'ryzyko prawne kredytow hipotecznych'],
+    aggregation: 'point_in_time',
+    description: 'Cost of Risk: procentowy wskaznik kosztu ryzyka kredytowego w relacji do portfela kredytowego. Nie jest kwota odpisow ani kosztow ryzyka prawnego.',
+    aliases: ['Koszt ryzyka', 'Cost of risk', 'Cost of Risk ratio', 'COR', 'Wskaznik kosztu ryzyka'],
+    keywords: ['wybrane wskazniki finansowe', 'wskaznik kosztu ryzyka', 'cost of risk ratio'],
   }),
   metric({
     metricKey: 'cet1',
@@ -249,9 +363,214 @@ export const BANK_REPORT_METRICS = [
     aliases: ['Naleznosci od klientow', 'Kredyty netto', 'Customer loans'],
     keywords: ['sprawozdanie z sytuacji finansowej', 'naleznosci od klientow'],
   }),
+  metric({
+    metricKey: 'nim',
+    label: 'NIM',
+    category: METRIC_CATEGORY_BANK,
+    valueType: 'percent',
+    defaultUnit: '%',
+    aggregation: 'point_in_time',
+    description: 'Net Interest Margin: marza odsetkowa netto pokazujaca wynik odsetkowy wzgledem aktywow odsetkowych.',
+    aliases: ['Marza odsetkowa netto', 'Marża odsetkowa netto', 'Net Interest Margin'],
+    keywords: ['wynik odsetkowy', 'aktywa odsetkowe', 'rentownosc odsetkowa'],
+  }),
+  metric({
+    metricKey: 'mrel',
+    label: 'MREL',
+    category: METRIC_CATEGORY_BANK,
+    valueType: 'percent',
+    defaultUnit: '%',
+    aggregation: 'point_in_time',
+    description: 'Minimum Requirement for own funds and Eligible Liabilities: wymog funduszy wlasnych i zobowiazan kwalifikowalnych.',
+    aliases: ['Wymog MREL', 'Wymóg MREL', 'Minimum Requirement for own funds and Eligible Liabilities'],
+    keywords: ['resolution', 'zobowiazania kwalifikowalne', 'fundusze wlasne'],
+  }),
+  metric({
+    metricKey: 'lcr',
+    label: 'LCR',
+    category: METRIC_CATEGORY_BANK,
+    valueType: 'percent',
+    defaultUnit: '%',
+    aggregation: 'point_in_time',
+    description: 'Liquidity Coverage Ratio: wskaznik pokrycia plynnosci mierzacy bufor aktywow plynnych banku.',
+    aliases: ['Wskaznik pokrycia plynnosci', 'Wskaźnik pokrycia płynności', 'Liquidity Coverage Ratio'],
+    keywords: ['plynnosc', 'aktywa plynne', 'bufor plynnosciowy'],
+  }),
 ];
 
-export const REPORT_METRIC_CATALOG = [...COMMON_REPORT_METRICS, ...BANK_REPORT_METRICS];
+const METRIC_NAMES = {
+  net_income: { shortName: 'Zysk netto', namePl: 'Zysk netto', nameEn: 'Net Income' },
+  total_assets: { shortName: 'Aktywa', namePl: 'Aktywa ogółem', nameEn: 'Total Assets' },
+  total_liabilities: { shortName: 'Zobowiązania', namePl: 'Zobowiązania ogółem', nameEn: 'Total Liabilities' },
+  equity: { shortName: 'Kapitał własny', namePl: 'Kapitał własny', nameEn: 'Equity' },
+  cash_flow_total: { shortName: 'Cash flow netto', namePl: 'Przepływy pieniężne razem', nameEn: 'Net Cash Flow' },
+  roe: { shortName: 'ROE', namePl: 'Rentowność kapitału własnego', nameEn: 'Return on Equity' },
+  roa: { shortName: 'ROA', namePl: 'Rentowność aktywów', nameEn: 'Return on Assets' },
+  roic: { shortName: 'ROIC', namePl: 'Rentowność zainwestowanego kapitału', nameEn: 'Return on Invested Capital' },
+  gross_margin: { shortName: 'Marża brutto', namePl: 'Marża brutto', nameEn: 'Gross Margin' },
+  operating_margin: { shortName: 'Marża operacyjna', namePl: 'Marża operacyjna', nameEn: 'Operating Margin' },
+  net_margin: { shortName: 'Marża netto', namePl: 'Marża netto', nameEn: 'Net Margin' },
+  net_debt_ebitda: { shortName: 'Net Debt / EBITDA', namePl: 'Dług netto / EBITDA', nameEn: 'Net Debt / EBITDA' },
+  current_ratio: { shortName: 'Current Ratio', namePl: 'Wskaźnik płynności bieżącej', nameEn: 'Current Ratio' },
+  quick_ratio: { shortName: 'Quick Ratio', namePl: 'Wskaźnik płynności szybkiej', nameEn: 'Quick Ratio' },
+  free_cash_flow: { shortName: 'FCF', namePl: 'Wolne przepływy pieniężne', nameEn: 'Free Cash Flow' },
+  dividend_per_share: { shortName: 'DPS', namePl: 'Dywidenda na akcję', nameEn: 'Dividend per Share' },
+  net_interest_income: { shortName: 'Wynik odsetkowy', namePl: 'Wynik z tytułu odsetek', nameEn: 'Net Interest Income' },
+  net_fee_commission_income: { shortName: 'Wynik prowizyjny', namePl: 'Wynik z opłat i prowizji', nameEn: 'Net Fee and Commission Income' },
+  cost_income_ratio: { shortName: 'C/I', namePl: 'Wskaźnik kosztów do dochodów', nameEn: 'Cost to Income Ratio' },
+  cost_of_risk: { shortName: 'CoR', namePl: 'Koszt ryzyka', nameEn: 'Cost of Risk' },
+  cet1: { shortName: 'CET1', namePl: 'Współczynnik CET1', nameEn: 'Common Equity Tier 1 Ratio' },
+  tcr: { shortName: 'TCR', namePl: 'Łączny współczynnik kapitałowy', nameEn: 'Total Capital Ratio' },
+  npl_ratio: { shortName: 'NPL', namePl: 'Wskaźnik kredytów niepracujących', nameEn: 'Non-Performing Loans Ratio' },
+  loan_deposit_ratio: { shortName: 'L/D', namePl: 'Wskaźnik kredytów do depozytów', nameEn: 'Loan to Deposit Ratio' },
+  eps: { shortName: 'EPS', namePl: 'Zysk na akcję', nameEn: 'Earnings per Share' },
+  dividend_amount: { shortName: 'Dywidenda', namePl: 'Kwota dywidendy', nameEn: 'Dividend Amount' },
+  dividend_net_profit_ratio: { shortName: 'Payout Ratio', namePl: 'Dywidenda / zysk netto', nameEn: 'Dividend Payout Ratio' },
+  customer_deposits: { shortName: 'Depozyty klientów', namePl: 'Depozyty klientów', nameEn: 'Customer Deposits' },
+  customer_loans: { shortName: 'Kredyty klientów', namePl: 'Kredyty klientów', nameEn: 'Customer Loans' },
+  nim: { shortName: 'NIM', namePl: 'Marża odsetkowa netto', nameEn: 'Net Interest Margin' },
+  mrel: { shortName: 'MREL', namePl: 'Wymóg MREL', nameEn: 'Minimum Requirement for own funds and Eligible Liabilities' },
+  lcr: { shortName: 'LCR', namePl: 'Wskaźnik pokrycia płynności', nameEn: 'Liquidity Coverage Ratio' },
+};
+
+const METRIC_COPY_OVERRIDES = {
+  net_income: {
+    description: 'Wynik finansowy po podatku za dany okres, pokazujący ile zysku zostaje dla akcjonariuszy.',
+    aliases: ['Zysk netto', 'Strata netto', 'Wynik netto', 'Zysk netto przypadający akcjonariuszom', 'Net profit', 'Net income', 'Profit for the period', 'Net profit attributable to shareholders'],
+    keywords: ['rachunek zysków i strat', 'wynik finansowy', 'net profit'],
+  },
+  total_assets: {
+    label: 'Aktywa ogółem',
+    description: 'Suma majątku kontrolowanego przez spółkę lub bank na koniec okresu.',
+    aliases: ['Aktywa ogółem', 'Aktywa razem', 'Suma aktywów', 'Total assets'],
+  },
+  total_liabilities: {
+    label: 'Zobowiązania ogółem',
+    description: 'Suma zobowiązań jednostki wobec finansujących, klientów, dostawców i innych stron.',
+    aliases: ['Zobowiązania ogółem', 'Zobowiązania razem', 'Suma zobowiązań', 'Total liabilities'],
+  },
+  equity: {
+    label: 'Kapitał własny',
+    description: 'Wartość kapitału przypadająca właścicielom po odjęciu zobowiązań od aktywów.',
+    aliases: ['Kapitał własny', 'Kapitał własny razem', 'Equity', 'Total equity', 'Shareholders equity'],
+    keywords: ['sprawozdanie z sytuacji finansowej', 'kapitał'],
+  },
+  cash_flow_total: {
+    label: 'Przepływy pieniężne razem',
+    description: 'Łączna zmiana stanu środków pieniężnych wynikająca z przepływów operacyjnych, inwestycyjnych i finansowych.',
+    aliases: ['Przepływy pieniężne razem', 'Przepływy pieniężne netto', 'Zmiana stanu środków pieniężnych', 'Cash flow razem', 'Net cash flow'],
+    keywords: ['sprawozdanie z przepływów pieniężnych', 'cash flow'],
+  },
+  roe: {
+    description: 'Return on Equity: rentowność kapitału własnego, czyli relacja zysku netto do kapitałów własnych.',
+    aliases: ['ROE', 'Rentowność kapitału własnego', 'Return on equity', 'ROE ratio'],
+    keywords: ['wybrane wskaźniki finansowe', 'rentowność'],
+  },
+  roa: {
+    description: 'Return on Assets: rentowność aktywów, czyli relacja zysku netto do aktywów.',
+    aliases: ['ROA', 'Rentowność aktywów', 'Return on assets', 'ROA ratio'],
+    keywords: ['wybrane wskaźniki finansowe', 'rentowność'],
+  },
+  net_interest_income: {
+    label: 'Wynik z tytułu odsetek',
+    description: 'Net interest income: różnica między przychodami odsetkowymi a kosztami odsetkowymi banku.',
+    aliases: ['Wynik z tytułu odsetek', 'Wynik odsetkowy', 'Dochody odsetkowe netto', 'Przychody odsetkowe netto', 'Net interest income', 'Interest income net'],
+    keywords: ['rachunek zysków i strat', 'odsetki'],
+  },
+  net_fee_commission_income: {
+    label: 'Wynik z opłat i prowizji',
+    description: 'Net fee and commission income: wynik netto na opłatach i prowizjach pobieranych za usługi bankowe.',
+    aliases: ['Wynik z opłat i prowizji', 'Wynik prowizyjny', 'Wynik z tytułu prowizji i opłat', 'Wynik z tytułu opłat i prowizji', 'Net fee and commission income', 'Fee and commission income net'],
+    keywords: ['rachunek zysków i strat', 'prowizje', 'opłaty'],
+  },
+  cost_income_ratio: {
+    description: 'Cost to Income: relacja kosztów działania do dochodów banku, pokazująca efektywność kosztową.',
+    aliases: ['C/I', 'Cost to Income', 'Cost income ratio', 'CIR', 'Wskaźnik kosztów do dochodów', 'Koszty do dochodów'],
+    keywords: ['wybrane wskaźniki finansowe', 'efektywność kosztowa', 'cost income'],
+  },
+  cost_of_risk: {
+    description: 'Cost of Risk: procentowy wskaźnik kosztu ryzyka kredytowego w relacji do portfela kredytowego. Nie jest kwotą odpisów ani kosztów ryzyka prawnego.',
+    aliases: ['CoR', 'Koszt ryzyka', 'Cost of risk', 'Cost of Risk ratio', 'COR', 'Wskaźnik kosztu ryzyka'],
+    keywords: ['wybrane wskaźniki finansowe', 'wskaźnik kosztu ryzyka', 'cost of risk ratio'],
+  },
+  cet1: {
+    description: 'Common Equity Tier 1: podstawowy współczynnik kapitałowy oparty na najwyższej jakości kapitałach banku.',
+    aliases: ['CET1', 'Common Equity Tier 1', 'Współczynnik CET1', 'Tier 1', 'CET 1 ratio'],
+    keywords: ['adekwatność kapitałowa', 'zarządzanie kapitałem', 'fundusze własne'],
+  },
+  tcr: {
+    description: 'Total Capital Ratio: łączny współczynnik kapitałowy pokazujący relację funduszy własnych do aktywów ważonych ryzykiem.',
+    aliases: ['TCR', 'Łączny współczynnik kapitałowy', 'Współczynnik wypłacalności', 'Total capital ratio', 'CAR', 'Total capital adequacy ratio'],
+    keywords: ['adekwatność kapitałowa', 'zarządzanie kapitałem', 'fundusze własne'],
+  },
+  npl_ratio: {
+    description: 'Non-Performing Loans: udział kredytów niepracujących lub zagrożonych w portfelu kredytowym.',
+    aliases: ['NPL', 'NPL ratio', 'Non-Performing Loans', 'Non performing loans', 'Udział kredytów niepracujących', 'Kredyty niepracujące'],
+    keywords: ['jakość portfela', 'ryzyko kredytowe', 'non-performing loans'],
+  },
+  loan_deposit_ratio: {
+    description: 'Loan to Deposit: relacja kredytów klientów do depozytów klientów, przybliżająca poziom finansowania akcji kredytowej depozytami.',
+    aliases: ['L/D', 'Loan to Deposit', 'Loan deposit ratio', 'LDR', 'Wskaźnik kredytów do depozytów', 'Kredyty do depozytów'],
+  },
+  eps: {
+    defaultUnit: 'PLN/akcję',
+    description: 'Earnings per Share: zysk netto przypadający na jedną akcję.',
+    aliases: ['EPS', 'Zysk na jedną akcję', 'Zysk na akcję', 'Earnings per share', 'Basic EPS', 'Diluted EPS'],
+  },
+  dividend_amount: {
+    description: 'Łączna kwota dywidendy przeznaczona do wypłaty akcjonariuszom za dany okres lub rok.',
+    aliases: ['Dywidenda', 'Kwota dywidendy', 'Dywidenda wypłacona', 'Dywidenda za rok', 'Dividend amount', 'Total dividend', 'Dividend paid'],
+    keywords: ['dywidenda', 'podział zysku', 'dividend'],
+  },
+  dividend_net_profit_ratio: {
+    description: 'Udział łącznej dywidendy w zysku netto za ten sam okres lub rok; metryka powinna być liczona z dywidendy i zysku netto.',
+    aliases: ['Dividend/net profit', 'Dividend net profit', 'Dividend to net profit', 'Dividend payout ratio', 'Payout ratio', 'Stopa wypłaty dywidendy', 'Dywidenda do zysku netto'],
+  },
+  customer_deposits: {
+    label: 'Depozyty klientów',
+    description: 'Zobowiązania banku wobec klientów z tytułu zdeponowanych środków.',
+    aliases: ['Depozyty klientów', 'Zobowiązania wobec klientów', 'Depozyty', 'Customer deposits'],
+    keywords: ['sprawozdanie z sytuacji finansowej', 'zobowiązania wobec klientów'],
+  },
+  customer_loans: {
+    label: 'Kredyty klientów',
+    description: 'Należności banku od klientów, zwykle portfel kredytów i pożyczek netto.',
+    aliases: ['Kredyty klientów', 'Należności od klientów', 'Kredyty netto', 'Customer loans'],
+    keywords: ['sprawozdanie z sytuacji finansowej', 'należności od klientów'],
+  },
+};
+
+const applyMetricCopyOverrides = (spec) => ({
+  ...spec,
+  ...(METRIC_COPY_OVERRIDES[spec.metricKey] || {}),
+});
+
+const applyMetricMetadata = (spec) => {
+  const names = METRIC_NAMES[spec.metricKey];
+  const tier = PRIORITY_BANK_REPORT_METRIC_KEYS.includes(spec.metricKey) ? 'primary' : 'secondary';
+  return {
+    ...spec,
+    ...names,
+    tier,
+    aliases: [...new Set([names.shortName, names.namePl, names.nameEn, ...spec.aliases].filter(Boolean))],
+  };
+};
+
+const buildMetricSpec = (spec) => applyMetricMetadata(applyMetricCopyOverrides(spec));
+const metricTierOrder = (spec) => (
+  spec.tier === 'primary'
+    ? PRIORITY_BANK_REPORT_METRIC_KEYS.indexOf(spec.metricKey)
+    : PRIORITY_BANK_REPORT_METRIC_KEYS.length
+);
+const sortMetricSpecs = (left, right) => metricTierOrder(left) - metricTierOrder(right);
+
+export const COMMON_REPORT_METRICS = COMMON_REPORT_METRIC_BASE.map(buildMetricSpec).sort(sortMetricSpecs);
+export const BANK_REPORT_METRICS = BANK_REPORT_METRIC_BASE.map(buildMetricSpec).sort(sortMetricSpecs);
+export const REPORT_METRIC_CATALOG = [...COMMON_REPORT_METRICS, ...BANK_REPORT_METRICS].sort(sortMetricSpecs);
+
+export const PRIORITY_BANK_REPORT_METRICS = PRIORITY_BANK_REPORT_METRIC_KEYS
+  .map((key) => REPORT_METRIC_CATALOG.find((metricSpec) => metricSpec.metricKey === key))
+  .filter(Boolean);
 
 export const normalizeMetricText = (value) => String(value || '')
   .normalize('NFD')
@@ -280,7 +599,21 @@ export const isBankReportProfile = (profile = {}) => {
 };
 
 export const getReportMetricsForProfile = (profile = {}) => {
-  return isBankReportProfile(profile) ? REPORT_METRIC_CATALOG : COMMON_REPORT_METRICS;
+  return isBankReportProfile(profile)
+    ? REPORT_METRIC_CATALOG
+    : REPORT_METRIC_CATALOG.filter((metricSpec) => metricSpec.category === METRIC_CATEGORY_COMMON);
+};
+
+export const metricUnitMatchesValueType = (unit, valueType) => {
+  const normalized = String(unit || '').trim().toLowerCase();
+  const isPercent = /%|procent|proc\.?|\bbps?\b|p\.?p\.?/.test(normalized);
+  const isMoney = /\b(?:pln|eur|usd|gbp|chf|czk|sek|nok|dkk|jpy|cny|hkd|cad|aud)\b|[€$£¥]/i.test(normalized);
+  const isPerShare = /akcj|share/.test(normalized);
+  if (valueType === 'percent') return isPercent && !isMoney;
+  if (valueType === 'money') return isMoney && !isPercent && !isPerShare;
+  if (valueType === 'money_per_share') return isMoney && isPerShare && !isPercent;
+  if (valueType === 'ratio') return !isMoney && !isPercent && /(?:^|\s)x(?:$|\s)|razy|ratio/.test(normalized);
+  return true;
 };
 
 const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);

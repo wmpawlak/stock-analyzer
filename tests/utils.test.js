@@ -14,7 +14,12 @@ import {
   mapAlphaVantageOverview,
   resolveInstrument,
 } from '../src/utils/investmentDetails.js';
-import { getReportMetricDefinition } from '../src/utils/reportMetricDefinitions.js';
+import {
+  filterReportMetricFactsForPeriod,
+  formatReportMetricValue,
+  getReportMetricDefinition,
+  sortReportMetricFacts,
+} from '../src/utils/reportMetricDefinitions.js';
 import {
   formatCompactAxisValue,
   formatPercentValue,
@@ -58,7 +63,27 @@ test('report metric definitions expose catalog tooltip copy for keys and aliases
 
   const loanDeposit = getReportMetricDefinition('Loan to Deposit');
   assert.equal(loanDeposit.metricKey, 'loan_deposit_ratio');
-  assert.match(loanDeposit.description, /depozytow/);
+  assert.match(loanDeposit.description, /depozytów/);
+});
+
+test('report metric view logic filters comparison periods and orders primary before secondary', () => {
+  const facts = [
+    { metricKey: 'free_cash_flow', label: 'FCF', value: 12.5, unit: 'mln EUR', period: '31.03.2025' },
+    { metricKey: 'roe', label: 'ROE', value: 14, unit: '%', period: 'Q1 2024' },
+    { metricKey: 'net_income', label: 'Zysk netto', value: 30, unit: 'mln EUR', period: 'Q1 2025' },
+  ];
+
+  const visible = sortReportMetricFacts(filterReportMetricFactsForPeriod(facts, 'Q1 2025'));
+  assert.deepEqual(visible.map((fact) => fact.metricKey), ['net_income', 'free_cash_flow']);
+  assert.deepEqual(visible.map((fact) => fact.period), ['Q1 2025', 'Q1 2025']);
+  assert.equal(getReportMetricDefinition('net_income').tier, 'primary');
+  assert.equal(getReportMetricDefinition('free_cash_flow').tier, 'secondary');
+});
+
+test('report metric values preserve the unit and currency found in the report', () => {
+  assert.equal(formatReportMetricValue({ value: 12.5, unit: 'mln EUR' }), '12,5 mln EUR');
+  assert.equal(formatReportMetricValue({ value: 1.2, unit: 'EUR/akcję' }), '1,2 EUR/akcję');
+  assert.equal(formatReportMetricValue({ value: null, unit: 'USD' }), '—');
 });
 
 test('getPositionMetrics calculates portfolio and result metrics', () => {

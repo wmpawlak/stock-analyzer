@@ -111,17 +111,6 @@
       "confidence": 0.9
     },
     {
-      "metricKey": "cost_of_risk",
-      "label": "Koszt ryzyka",
-      "value": -115273,
-      "unit": "tys. PLN",
-      "period": "Q1 2026",
-      "page": null,
-      "section": "Skonsolidowany rachunek zyskow i strat",
-      "quote": "Wynik z tytulu oczekiwanych strat kredytowych -115 273 tys. PLN",
-      "confidence": 0.82
-    },
-    {
       "metricKey": "cet1",
       "label": "CET1",
       "value": 17.85,
@@ -215,9 +204,9 @@
     },
     {
       "metricKey": "cost_of_risk",
-      "label": "Koszt ryzyka",
-      "reason": "Raport moze prezentowac koszt ryzyka jako wskaznik lub jako wartosc rachunku wynikow; fixture zapisuje kwote ECL, a prompt v2 powinien preferowac jawnie opisana jednostke z raportu.",
-      "evidence": "Uzyta wartosc -115 273 tys. PLN pochodzi z pozycji wyniku z tytulu oczekiwanych strat kredytowych."
+      "label": "CoR",
+      "reason": "Fixture nie zawiera jednoznacznego procentowego wskaznika CoR; kwota ECL nie jest metryka cost_of_risk.",
+      "evidence": "Pozycja wyniku z tytulu oczekiwanych strat kredytowych -115 273 tys. PLN jest kwota, a nie wskaznikiem CoR."
     }
   ]
 }

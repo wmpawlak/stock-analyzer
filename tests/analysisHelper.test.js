@@ -105,7 +105,7 @@ test('analysis store archives an original ZIP, registers extracted files and res
   });
 });
 
-test('approved analysis persists report metric facts once per asset, metric, period and document', async () => {
+test('approved analysis materializes latest report metric facts once per asset, metric and period', async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = await createAnalysisStore({ dataDir: directory });
     try {
@@ -169,7 +169,7 @@ test('approved analysis persists report metric facts once per asset, metric, per
 
       store.approveAnalysis(draft.id);
       const approvedMetrics = store.listApprovedReportMetrics('company:WSE:CDR');
-      assert.equal(approvedMetrics.length, 3);
+      assert.equal(approvedMetrics.length, 2);
       const netIncome = approvedMetrics.find((metric) => metric.metricKey === 'net_income');
       assert.equal(netIncome.value, 100);
       assert.equal(netIncome.valueNumeric, 100);
@@ -177,11 +177,45 @@ test('approved analysis persists report metric facts once per asset, metric, per
       assert.equal(netIncome.page, 12);
       assert.equal(netIncome.aggregation, 'sum');
       assert.equal(netIncome.source.evidence, 'Zysk netto 100 tys. PLN');
-      const comparativeAssets = approvedMetrics.find((metric) => metric.metricKey === 'assets_total');
-      assert.equal(comparativeAssets.period, 'Q1 2025');
+      assert.equal(approvedMetrics.some((metric) => metric.metricKey === 'assets_total'), false);
 
       store.approveAnalysis(draft.id);
-      assert.equal(store.listApprovedReportMetrics('company:WSE:CDR').length, 3);
+      assert.equal(store.listApprovedReportMetrics('company:WSE:CDR').length, 2);
+
+      const q2Saved = await store.saveDocument('company:WSE:CDR', {
+        buffer: Buffer.from('Zysk netto 210 tys. PLN'),
+        filename: 'q2.txt',
+        title: 'Raport Q2',
+        type: 'raport kwartalny',
+        period: 'Q2 2026',
+      });
+      const q2Draft = store.createDraftAnalysis('company:WSE:CDR', {
+        documentIds: [q2Saved.document.id],
+        content: {
+          title: 'Analiza Q2',
+          schemaVersion: '2.0',
+          reportPeriod: 'Q2 2026',
+          summary: 'Wynik testowy.',
+          metricFacts: [{
+            metricKey: 'net_income',
+            label: 'Zysk netto',
+            value: 210,
+            unit: 'tys. PLN',
+            period: '30.06.2026',
+            page: 14,
+            section: 'Rachunek wynikow',
+            quote: 'Zysk netto 210 tys. PLN',
+            confidence: 0.92,
+          }],
+          risks: [],
+          conclusions: [],
+          extractionWarnings: [],
+        },
+      });
+      store.approveAnalysis(q2Draft.id);
+      const afterQ2 = store.listApprovedReportMetrics('company:WSE:CDR');
+      assert.equal(afterQ2.length, 3);
+      assert.equal(afterQ2.some((metric) => metric.metricKey === 'net_income' && metric.period === 'Q2 2026'), true);
 
       const updatedDraft = store.createDraftAnalysis('company:WSE:CDR', {
         documentIds: [saved.document.id],
@@ -210,7 +244,7 @@ test('approved analysis persists report metric facts once per asset, metric, per
       store.approveAnalysis(updatedDraft.id);
       const afterUpdate = store.listApprovedReportMetrics('company:WSE:CDR');
       assert.equal(afterUpdate.length, 3);
-      const updatedNetIncome = afterUpdate.find((metric) => metric.metricKey === 'net_income');
+      const updatedNetIncome = afterUpdate.find((metric) => metric.metricKey === 'net_income' && metric.period === 'Q1 2026');
       assert.equal(updatedNetIncome.value, 150);
       assert.equal(updatedNetIncome.page, 13);
       assert.equal(updatedNetIncome.analysisId, updatedDraft.id);
@@ -223,8 +257,54 @@ test('approved analysis persists report metric facts once per asset, metric, per
       assert.equal(deleted.deleted, true);
       assert.throws(() => store.getAnalysis(updatedDraft.id), { code: 'ANALYSIS_NOT_FOUND' });
       const afterDelete = store.listApprovedReportMetrics('company:WSE:CDR');
-      assert.equal(afterDelete.length, 2);
-      assert.equal(afterDelete.some((metric) => metric.metricKey === 'net_income'), false);
+      assert.equal(afterDelete.length, 3);
+      const restoredNetIncome = afterDelete.find((metric) => metric.metricKey === 'net_income' && metric.period === 'Q1 2026');
+      assert.equal(restoredNetIncome.value, 100);
+      assert.equal(restoredNetIncome.page, 12);
+      assert.equal(restoredNetIncome.analysisId, draft.id);
+    } finally {
+      store.close();
+    }
+  });
+});
+
+test('approved report metrics reject merged integers and monetary CoR duplicates', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = await createAnalysisStore({ dataDir: directory });
+    try {
+      const assetId = 'instrument:ALR_3AWSE';
+      store.upsertProfile({ assetId, type: 'instrument', name: 'Alior Bank', canonicalId: 'ALR:WSE' });
+      const saved = await store.saveDocument(assetId, {
+        buffer: Buffer.from('Zysk netto 476 314 PLN. CoR 0,74%.'),
+        filename: 'q1.txt',
+        title: 'Raport Q1 2025',
+        type: 'raport kwartalny',
+        period: 'Q1 2025',
+      });
+      const fact = (metricKey, label, value, unit, confidence) => ({
+        metricKey, label, value, unit, confidence,
+        period: 'Q1 2025', page: 1, section: 'Tabela', quote: `${label} ${value} ${unit}`,
+      });
+      const draft = store.createDraftAnalysis(assetId, {
+        documentIds: [saved.document.id],
+        content: {
+          title: 'Analiza Q1 2025', schemaVersion: '2.0', reportPeriod: 'Q1 2025', summary: 'Test.',
+          metricFacts: [
+            fact('net_income', 'Zysk netto', 476314, 'PLN', 0.9),
+            fact('net_income', 'Zysk netto', 4763142445022578000, 'PLN', 0.99),
+            fact('cost_of_risk', 'CoR', '0,74', '%', 0.9),
+            fact('cost_of_risk', 'Koszty ryzyka prawnego', 1589400, 'PLN', 0.95),
+          ],
+          risks: [], conclusions: [], extractionWarnings: [],
+        },
+      });
+
+      store.approveAnalysis(draft.id);
+      const metrics = store.listApprovedReportMetrics(assetId);
+      assert.deepEqual(
+        metrics.map((metric) => [metric.metricKey, metric.valueNumeric, metric.unit]),
+        [['cost_of_risk', 0.74, '%'], ['net_income', 476314, 'PLN']],
+      );
     } finally {
       store.close();
     }
@@ -293,7 +373,53 @@ test('approved report metrics merge quarter-end dates and quarter labels into on
   });
 });
 
-test('approved analysis derives dividend net profit ratio only from matching PLN source facts', async () => {
+test('store startup rebuilds approved report metrics without changing original analysis JSON', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    let store = await createAnalysisStore({ dataDir: directory });
+    try {
+      const assetId = 'company:WSE:CDR';
+      const saved = await store.saveDocument(assetId, {
+        buffer: Buffer.from('Zysk netto Q1 2025 i Q1 2024'),
+        filename: 'q1-rebuild.txt',
+        title: 'Raport Q1 2025',
+        type: 'raport kwartalny',
+        period: 'Q1 2025',
+      });
+      const draft = store.createDraftAnalysis(assetId, {
+        documentIds: [saved.document.id],
+        content: {
+          title: 'Analiza rebuild',
+          schemaVersion: '2.0',
+          reportPeriod: 'Q1 2025',
+          summary: 'Wynik testowy.',
+          metricFacts: [
+            { metricKey: 'net_income', label: 'Zysk netto', value: 100, unit: 'mln EUR', period: '31.03.2025' },
+            { metricKey: 'net_income', label: 'Zysk netto', value: 80, unit: 'mln EUR', period: 'Q1 2024' },
+          ],
+          risks: [],
+          conclusions: [],
+          extractionWarnings: [],
+        },
+      });
+      store.approveAnalysis(draft.id);
+      store.db.prepare("UPDATE approved_report_metrics SET period = 'Q4 1999' WHERE asset_id = ?").run(assetId);
+      store.close();
+
+      store = await createAnalysisStore({ dataDir: directory });
+      const rebuilt = store.listApprovedReportMetrics(assetId);
+      const analysis = store.listAnalyses(assetId).find((item) => item.id === draft.id);
+
+      assert.equal(rebuilt.length, 1);
+      assert.equal(rebuilt[0].period, 'Q1 2025');
+      assert.equal(rebuilt[0].value, 100);
+      assert.deepEqual(analysis.content.metricFacts.map((fact) => fact.period), ['31.03.2025', 'Q1 2024']);
+    } finally {
+      store?.close();
+    }
+  });
+});
+
+test('approved analysis derives dividend net profit ratio for matching currencies and rejects mixed or per-share inputs', async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = await createAnalysisStore({ dataDir: directory });
     try {
@@ -324,23 +450,23 @@ test('approved analysis derives dividend net profit ratio only from matching PLN
             {
               metricKey: 'net_income',
               label: 'Zysk netto',
-              value: 1000,
-              unit: 'tys. PLN',
+              value: 1,
+              unit: 'mln EUR',
               period: '2025',
               page: 10,
               section: 'Rachunek wynikow',
-              quote: 'Zysk netto 1 000 tys. PLN',
+              quote: 'Zysk netto 1 mln EUR',
               confidence: 0.91,
             },
             {
               metricKey: 'dividend_amount',
               label: 'Dywidenda',
               value: 250,
-              unit: 'tys. PLN',
+              unit: 'tys. EUR',
               period: '2025',
               page: 20,
               section: 'Podzial zysku',
-              quote: 'Dywidenda 250 tys. PLN',
+              quote: 'Dywidenda 250 tys. EUR',
               confidence: 0.83,
             },
             {
@@ -406,6 +532,30 @@ test('approved analysis derives dividend net profit ratio only from matching PLN
       });
 
       store.approveAnalysis(draft.id);
+      const approveInputs = (period, metricFacts) => {
+        const inputDraft = store.createDraftAnalysis(assetId, {
+          documentIds: [saved.document.id],
+          content: {
+            title: `Analiza wejsc ${period}`,
+            schemaVersion: '2.0',
+            reportPeriod: period,
+            summary: 'Wynik testowy.',
+            metricFacts,
+            risks: [],
+            conclusions: [],
+            extractionWarnings: [],
+          },
+        });
+        store.approveAnalysis(inputDraft.id);
+      };
+      approveInputs('2024', [
+        { metricKey: 'net_income', label: 'Zysk netto', value: 100, unit: 'USD', period: '2024' },
+        { metricKey: 'dividend_amount', label: 'Dywidenda', value: 25, unit: 'tys. PLN', period: '2024' },
+      ]);
+      approveInputs('2023', [
+        { metricKey: 'net_income', label: 'Zysk netto', value: 4, unit: 'EUR/akcję', period: '2023' },
+        { metricKey: 'dividend_amount', label: 'Dywidenda', value: 1, unit: 'EUR/akcję', period: '2023' },
+      ]);
       const approvedMetrics = store.listApprovedReportMetrics(assetId);
       const payoutRatios = approvedMetrics.filter((metric) => metric.metricKey === 'dividend_net_profit_ratio');
 
@@ -424,6 +574,7 @@ test('approved analysis derives dividend net profit ratio only from matching PLN
       assert.equal(approvedMetrics.some((metric) => metric.metricKey === 'dividend_net_profit_ratio' && metric.valueNumeric === 80), false);
       assert.equal(approvedMetrics.some((metric) => metric.metricKey === 'dividend_net_profit_ratio' && metric.period === 'Q1 2026'), false);
       assert.equal(approvedMetrics.some((metric) => metric.metricKey === 'dividend_net_profit_ratio' && metric.period === '2024'), false);
+      assert.equal(approvedMetrics.some((metric) => metric.metricKey === 'dividend_net_profit_ratio' && metric.period === '2023'), false);
     } finally {
       store.close();
     }
@@ -611,14 +762,14 @@ test('Perplexity adapter sends structured discovery and file-analysis requests w
       : JSON.stringify({
         schemaVersion: '1.0',
         title: 'Analiza Q1', 
-        reportPeriod: 'Q1 2026', 
+        reportPeriod: '',
         summary: 'Podsumowanie.', 
         structuredSummary: {
           headline: 'Wynik netto wzrosl, ale jakosc wyniku wymaga sprawdzenia kosztow ryzyka.',
           stance: 'mieszany',
           sections: [
             {
-              title: 'Najwazniejsze fakty',
+              title: 'Najważniejsze fakty',
               bullets: [{
                 text: 'Zysk netto wyniosl 100 mln PLN i jest glownym punktem zaczepienia analizy.',
                 metricKeys: ['net_income'],
@@ -630,30 +781,43 @@ test('Perplexity adapter sends structured discovery and file-analysis requests w
               bullets: [{ text: 'Raport wymaga porownania z analogicznym okresem, gdy metryki za rok poprzedni sa widoczne.' }],
             },
             {
-              title: 'Jakosc wyniku',
-              bullets: [{ text: 'Jakosc wyniku nalezy oceniac razem z powtarzalnoscia przychodow i kosztami ryzyka.' }],
+              title: 'Jakość wyniku',
+              bullets: [{ text: 'Jakość wyniku należy oceniać razem z powtarzalnością przychodów i kosztami ryzyka.' }],
             },
             {
               title: 'Ryzyka i kapital',
               bullets: [{ text: 'Ryzyka bankowe wymagaja osobnej kontroli kapitalu, NPL i kosztu ryzyka.' }],
             },
             {
-              title: 'Co sprawdzic dalej',
-              bullets: [{ text: 'W kolejnym kroku warto sprawdzic pelne noty do wyniku i kapitalu.' }],
+              title: 'Co sprawdzić dalej',
+              bullets: [{ text: 'W kolejnym kroku warto sprawdzić pełne noty do wyniku i kapitału.' }],
             },
           ],
         },
-        metricFacts: [{ 
-          metricKey: 'net_income', 
-          label: 'Zysk netto',
-          value: 100,
-          unit: 'mln PLN',
-          period: 'Q1 2026',
-          page: 2,
-          section: 'Rachunek zyskow i strat',
-          quote: 'Zysk netto 100 mln PLN',
-          confidence: 0.95,
-        }],
+        metricFacts: [
+          {
+            metricKey: 'net_income',
+            label: 'Zysk netto',
+            value: 100,
+            unit: 'mln PLN',
+            period: 'Q1 2026',
+            page: 2,
+            section: 'Rachunek zyskow i strat',
+            quote: 'Zysk netto 100 mln PLN',
+            confidence: 0.95,
+          },
+          {
+            metricKey: 'net_income',
+            label: 'Zysk netto',
+            value: 80,
+            unit: 'mln PLN',
+            period: 'Q1 2025',
+            page: 2,
+            section: 'Rachunek zyskow i strat',
+            quote: 'Zysk netto Q1 2025 80 mln PLN',
+            confidence: 0.9,
+          },
+        ],
         conclusions: [{
           text: 'Wniosek.',
           source: { documentId: 'doc_1', page: 2, section: 'Rachunek zyskow i strat', evidence: 'Zysk netto 100 mln PLN' },
@@ -665,7 +829,7 @@ test('Perplexity adapter sends structured discovery and file-analysis requests w
         extractionWarnings: [{
           metricKey: 'roe',
           label: 'ROE',
-          reason: 'Brak pewnego zrodla.',
+          reason: 'Brak pewnego źródła.',
           evidence: 'Nie znaleziono w raporcie.',
         }],
       });
@@ -698,16 +862,19 @@ test('Perplexity adapter sends structured discovery and file-analysis requests w
   const analysis = await analyzeDocumentsWithPerplexity({
     apiKey: 'test-key',
     profile,
-    documents: [{ id: 'doc_1', filename: 'q1.pdf', title: 'Raport Q1', type: 'raport kwartalny', period: 'Q1 2026', sourceUrl: 'https://issuer.example/q1.pdf', mimeType: 'application/pdf' }],
+    documents: [{ id: 'doc_1', filename: 'alior-q1-2026.pdf', title: 'Raport za I kwartal 2026', type: 'raport kwartalny', period: '', sourceUrl: 'https://issuer.example/q1.pdf', mimeType: 'application/pdf' }],
     documentBuffers: [pdfBuffer],
     fetchImpl,
   });
   assert.equal(analysis.model, 'sonar-pro');
   assert.equal(analysis.content.schemaVersion, '2.0'); 
+  assert.equal(analysis.content.reportPeriod, 'Q1 2026');
   assert.equal(analysis.content.summary, 'Podsumowanie.'); 
   assert.equal(analysis.content.structuredSummary.headline, 'Wynik netto wzrosl, ale jakosc wyniku wymaga sprawdzenia kosztow ryzyka.'); 
   assert.equal(analysis.content.structuredSummary.sections[0].bullets[0].metricKeys[0], 'net_income'); 
   assert.equal(analysis.content.metricFacts[0].metricKey, 'net_income'); 
+  assert.equal(analysis.content.metricFacts.length, 1);
+  assert.equal(analysis.content.metricFacts[0].period, 'Q1 2026');
   assert.equal(analysis.content.metrics[0].label, 'Zysk netto');
   assert.equal(analysis.content.extractionWarnings[0].metricKey, 'roe');
   assert.equal(analysis.content.citations[0].url, 'https://issuer.example/q1.pdf');
@@ -716,26 +883,90 @@ test('Perplexity adapter sends structured discovery and file-analysis requests w
   assert.equal(requests[1].body.response_format.json_schema.schema.required.includes('metricFacts'), true); 
   assert.deepEqual(requests[1].body.response_format.json_schema.schema.properties.schemaVersion.enum, ['2.0']); 
   assert.match(requests[1].body.messages[1].content[0].text, /structuredSummary/); 
-  assert.match(requests[1].body.messages[1].content[0].text, /analityk dla czlowieka/); 
-  assert.match(requests[1].body.messages[1].content[0].text, /Najwazniejsze fakty/); 
+  assert.match(requests[1].body.messages[1].content[0].text, /analityk dla człowieka/);
+  assert.match(requests[1].body.messages[1].content[0].text, /Najważniejsze fakty/);
   assert.match(requests[1].body.messages[1].content[0].text, /Zmiana vs rok temu/); 
   assert.match(requests[1].body.messages[1].content[0].text, /bez rekomendacji inwestycyjnej/); 
   assert.match(requests[1].body.messages[1].content[0].text, /Katalog metryk do ekstrakcji/); 
   assert.match(requests[1].body.messages[1].content[0].text, /extractionWarnings/);
-  assert.match(requests[1].body.messages[1].content[0].text, /kolumny porownawcze/);
+  assert.match(requests[1].body.messages[1].content[0].text, /PDF\/OCR/);
+  assert.match(requests[1].body.messages[1].content[0].text, /niższą confidence/);
+  assert.match(requests[1].body.messages[1].content[0].text, /tylko z kolumny okresu głównego raportu/);
+  assert.match(requests[1].body.messages[1].content[0].text, /kolumnę Q1 2024 pomiń jako metricFacts/);
+  assert.match(requests[1].body.messages[1].content[0].text, /"period":"Q1 2026"/);
   assert.match(requests[1].body.messages[1].content[0].text, /31\.03\.YYYY/);
-  assert.match(requests[1].body.messages[1].content[0].text, /Reguly profilu bankowego/);
-  assert.match(requests[1].body.messages[1].content[0].text, /priorytetem jest bankowy katalog metryk/);
-  assert.match(requests[1].body.messages[1].content[0].text, /nazwach polskich, nazwach angielskich oraz skrotach/);
+  assert.match(requests[1].body.messages[1].content[0].text, /tier primary/);
+  assert.match(requests[1].body.messages[1].content[0].text, /tier secondary/);
+  assert.match(requests[1].body.messages[1].content[0].text, /przez każdy wpis katalogu/);
+  assert.match(requests[1].body.messages[1].content[0].text, /shortName, namePl, nameEn, aliases, keywords, description, valueType i aggregation/);
+  assert.match(requests[1].body.messages[1].content[0].text, /Nie wymagaj dosłownego wystąpienia samego tekstu metricKey/);
+  assert.match(requests[1].body.messages[1].content[0].text, /Metryk z tier secondary również aktywnie szukaj/);
   assert.match(requests[1].body.messages[1].content[0].text, /Return on Equity/);
-  assert.match(requests[1].body.messages[1].content[0].text, /PLN \/ tys\. PLN \/ mln PLN/);
-  assert.match(requests[1].body.messages[1].content[0].text, /wszystkie wiarygodne okresy widoczne w tabeli/);
+  assert.match(requests[1].body.messages[1].content[0].text, /mln EUR/);
+  assert.match(requests[1].body.messages[1].content[0].text, /Nie przeliczaj walut i nie preferuj PLN/);
+  assert.match(requests[1].body.messages[1].content[0].text, /01\.04\.YYYY-30\.06\.YYYY/);
+  assert.match(requests[1].body.messages[1].content[0].text, /01\.01\.YYYY-30\.09\.YYYY/);
+  assert.match(requests[1].body.messages[1].content[0].text, /jednorazowe lub powtarzalne/);
   assert.match(requests[1].body.messages[1].content[0].text, /"metricKey": "cost_income_ratio"/);
   assert.match(requests[1].body.messages[1].content[0].text, /"metricKey": "loan_deposit_ratio"/);
+  assert.match(requests[1].body.messages[1].content[0].text, /"tier": "primary"/);
+  assert.match(requests[1].body.messages[1].content[0].text, /"tier": "secondary"/);
+  assert.equal((requests[1].body.messages[1].content[0].text.match(/Katalog metryk do ekstrakcji:/g) || []).length, 1);
+  assert.equal(requests[1].body.messages[1].content[0].text.includes('Priorytetowa checklista metryk bankowych'), false);
+  assert.equal(requests[1].body.messages[1].content[0].text.includes('"defaultUnit"'), false);
   assert.equal(requests[1].body.messages[1].content[1].type, 'text');
   assert.match(requests[1].body.messages[1].content[1].text, /tekst wyodrebniony lokalnie z PDF/);
   assert.match(requests[1].body.messages[1].content[1].text, /Zysk netto 100 mln PLN/);
   assert.equal(JSON.stringify(requests[1].body.messages[1].content).includes('file_url'), false);
+});
+
+test('analysis normalization rejects merged columns and monetary values mislabeled as CoR', async () => {
+  let requestBody;
+  const content = {
+    schemaVersion: '2.0',
+    title: 'Analiza Q1 2025',
+    reportPeriod: 'Q1 2025',
+    summary: 'Podsumowanie.',
+    metricFacts: [
+      { metricKey: 'net_income', label: 'Zysk netto', value: 476314, unit: 'PLN', period: 'Q1 2025', page: 6, section: 'RZiS', quote: 'Zysk netto 476 314 PLN', confidence: 0.9 },
+      { metricKey: 'net_income', label: 'Zysk netto', value: 4763142445022578000, unit: 'PLN', period: 'Q1 2025', page: 6, section: 'RZiS', quote: 'Zysk netto 4763142445022578125 - 17,6%', confidence: 0.99 },
+      { metricKey: 'cost_of_risk', label: 'CoR', value: '0,74', unit: '%', period: 'Q1 2025', page: 7, section: 'Wskaźniki', quote: 'CoR 0,74%', confidence: 0.9 },
+      { metricKey: 'cost_of_risk', label: 'Koszty ryzyka prawnego', value: 1589400, unit: 'PLN', period: 'Q1 2025', page: 12, section: 'Ryzyko prawne', quote: 'Koszty ryzyka prawnego 1 589 400 PLN', confidence: 0.95 },
+    ],
+    risks: [],
+    conclusions: [],
+    extractionWarnings: [],
+  };
+  const analysis = await analyzeDocumentsWithPerplexity({
+    apiKey: 'test-key',
+    profile: { assetId: 'instrument:ALR_3AWSE', type: 'instrument', name: 'Alior Bank', canonicalId: 'ALR:WSE' },
+    documents: [{ id: 'doc_1', filename: 'q1.txt', title: 'Raport Q1 2025', type: 'raport kwartalny', period: 'Q1 2025', mimeType: 'text/plain' }],
+    documentBuffers: [Buffer.from('Zysk netto 476 314 PLN. CoR 0,74%.')],
+    fetchImpl: async (_url, options) => {
+      requestBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify(content) } }],
+        usage: { cost: { total_cost: 0.01 } },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  assert.deepEqual(
+    analysis.content.metricFacts.map((fact) => [fact.metricKey, fact.value, fact.unit]),
+    [['net_income', 476314, 'PLN'], ['cost_of_risk', 0.74, '%']],
+  );
+  assert.equal(analysis.content.extractionWarnings.some((warning) => warning.reason.includes('kilku kolumn')), true);
+  assert.equal(analysis.content.extractionWarnings.some((warning) => warning.reason.includes('niezgodną z typem')), true);
+  const prompt = requestBody.messages[1].content[0].text;
+  assert.match(prompt, /Nigdy nie sklejaj cyfr z sąsiednich kolumn/);
+  assert.match(prompt, /podziały linii odzwierciedlają wiersze PDF/);
+  assert.match(prompt, /dopasuj każdą komórkę do jej nagłówka/);
+  assert.equal(prompt.includes('Wybrane dane finansowe dotyczące sprawozdania finansowego'), false);
+  assert.equal(prompt.includes('"Wynik z tytułu odsetek" jest wierszem 2'), false);
+  assert.equal(prompt.includes('"Zysk netto" wierszem 8'), false);
+  assert.equal(prompt.includes('476 314 | 244 502'), false);
+  assert.match(prompt, /cost_of_risk oznacza wyłącznie wskaźnik CoR/);
+  assert.match(prompt, /nie są CoR/);
 });
 
 test('PDF text extractor reads compressed text streams for analysis prompts', () => {
@@ -750,6 +981,90 @@ test('PDF text extractor reads compressed text streams for analysis prompts', ()
 
   assert.match(text, /Zysk netto/);
   assert.match(text, /403186/);
+});
+
+test('PDF text extractor applies embedded ToUnicode maps and reconstructs table rows', () => {
+  const cmap = `/CIDInit /ProcSet findresource begin
+begincmap
+1 beginbfchar
+<0001> <0057>
+endbfchar
+1 beginbfrange
+<0002> <0005> [<0079> <006E> <0069> <006B>]
+endbfrange
+endcmap`;
+  const content = Buffer.concat([
+    Buffer.from('BT /F4 10 Tf 1 0 0 1 20 700 Tm [('),
+    Buffer.from([0, 1, 0, 2, 0, 3, 0, 4, 0, 5]),
+    Buffer.from(')] TJ ET\nBT /F2 10 Tf 1 0 0 1 200 700 Tm (1 284 780) Tj ET'),
+  ]);
+  const pdf = Buffer.concat([
+    Buffer.from('%PDF-1.4\n1 0 obj\n<</Type/Font/Subtype/Type0/ToUnicode 2 0 R>>\nendobj\n'),
+    Buffer.from('2 0 obj\n<</Filter/FlateDecode>>\nstream\n'),
+    zlib.deflateSync(Buffer.from(cmap, 'latin1')),
+    Buffer.from('\nendstream\nendobj\n3 0 obj\n<</Font<</F4 1 0 R>>>>\nendobj\n'),
+    Buffer.from('4 0 obj\n<</Filter/FlateDecode>>\nstream\n'),
+    zlib.deflateSync(content),
+    Buffer.from('\nendstream\nendobj\n%%EOF', 'latin1'),
+  ]);
+
+  const text = extractPdfText(pdf);
+
+  assert.match(text, /Wynik 1 284 780/);
+});
+
+test('PDF text extractor keeps adjacent numeric table cells separated', () => {
+  const stream = zlib.deflateSync(Buffer.from(
+    'BT [(476) 12 (314)] TJ [(244) 12 (502)] TJ [(257) 12 (812)] TJ (5) Tj (-17,6%) Tj ET',
+    'latin1',
+  ));
+  const pdf = Buffer.concat([
+    Buffer.from('%PDF-1.4\n<< /Filter /FlateDecode >>\nstream\n', 'latin1'),
+    stream,
+    Buffer.from('\nendstream\n%%EOF', 'latin1'),
+  ]);
+
+  const text = extractPdfText(pdf);
+
+  assert.match(text, /476314\s+244502\s+257812\s+5\s+-17,6%/);
+  assert.equal(text.includes('4763142445022578125'), false);
+});
+
+test('Perplexity adapter retries transient socket failures', async () => {
+  let calls = 0;
+  const socketError = new TypeError('fetch failed');
+  socketError.cause = { code: 'UND_ERR_SOCKET' };
+
+  const analysis = await analyzeDocumentsWithPerplexity({
+    apiKey: 'test-key',
+    profile: { assetId: 'instrument:ALR_3AWSE', type: 'instrument', name: 'Alior Bank', canonicalId: 'ALR:WSE' },
+    documents: [{ id: 'doc_1', filename: 'q1.txt', title: 'Raport Q1', type: 'raport kwartalny', period: 'Q1 2026', sourceUrl: 'https://issuer.example/q1.txt', mimeType: 'text/plain' }],
+    documentBuffers: [Buffer.from('Zysk netto 100 mln PLN')],
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) throw socketError;
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({
+          schemaVersion: '2.0',
+          title: 'Analiza po retry',
+          reportPeriod: 'Q1 2026',
+          summary: 'Retry zadzialal.',
+          structuredSummary: {
+            headline: 'Retry zadzialal.',
+            stance: 'mieszany',
+            sections: [{ title: 'Najważniejsze fakty', bullets: [{ text: 'Test.' }] }],
+          },
+          metricFacts: [],
+          risks: [],
+          conclusions: [],
+          extractionWarnings: [],
+        }) } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(analysis.content.title, 'Analiza po retry');
 });
 
 test('Perplexity adapter explains TLS certificate failures from local Node fetch', async () => {

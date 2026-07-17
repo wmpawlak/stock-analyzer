@@ -2,3 +2,5 @@ Tabela metryk - jeśli kolumna jest Q1 2026 i obok jest druga na 31.03.2026 - cz
 Upewnić się że wszystkie dane mają swoje odzwierciedlenie w realnych plikach a nie tylko local storage
 $env:NODE_OPTIONS='--use-system-ca'
 npx ccusage@latest codex daily
+Moduł który wyliczy moje tempo oszczędzania i do zakładanego dnia wolności finansowej
+
