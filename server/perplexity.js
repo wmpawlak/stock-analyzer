@@ -5,7 +5,12 @@ import {
   metricUnitMatchesValueType,
 } from './analysisMetricCatalog.js';
 import { extractPdfText } from './pdfText.js';
-import { inferReportPeriodFromText, normalizeReportPeriod } from '../shared/reportPeriods.js';
+import {
+  getReportPeriodInfo,
+  inferReportPeriodFromText,
+  normalizeReportMetricPeriod,
+  normalizeReportPeriod,
+} from '../shared/reportPeriods.js';
 
 const PERPLEXITY_ENDPOINT = 'https://api.perplexity.ai/chat/completions';
 const INLINE_TEXT_EXTENSIONS = new Set(['txt', 'rtf', 'html', 'htm', 'csv']);
@@ -418,7 +423,7 @@ const normalizeMetricFacts = ({ facts, reportPeriod, catalog }) => {
 
   for (const fact of facts) {
     if (!isPlainObject(fact)) continue;
-    const factPeriod = normalizeReportPeriod(fact.period);
+    const factPeriod = normalizeReportMetricPeriod(fact.period, reportPeriod);
     if (reportPeriod && factPeriod && factPeriod !== reportPeriod) continue;
     const spec = specs.get(stringOrEmpty(fact.metricKey));
     if (!spec) continue;
@@ -473,7 +478,7 @@ const normalizeMetricFacts = ({ facts, reportPeriod, catalog }) => {
 };
 
 const normaliseAnalysis = (parsed, fallback, profile) => {
-  const reportPeriod = normalizeReportPeriod(parsed?.reportPeriod) || normalizeReportPeriod(fallback.reportPeriod);
+  const reportPeriod = normalizeReportPeriod(fallback.reportPeriod) || normalizeReportPeriod(parsed?.reportPeriod);
   const normalizedFacts = normalizeMetricFacts({
     facts: Array.isArray(parsed?.metricFacts) ? parsed.metricFacts.filter(Boolean) : [],
     reportPeriod,
@@ -490,7 +495,10 @@ const normaliseAnalysis = (parsed, fallback, profile) => {
     ? parsed.metrics
       .filter(Boolean)
       .filter((metric) => {
-        const metricPeriod = normalizeReportPeriod(metric?.period || metric?.reportingPeriod || metric?.date || metric?.year);
+        const metricPeriod = normalizeReportMetricPeriod(
+          metric?.period || metric?.reportingPeriod || metric?.date || metric?.year,
+          reportPeriod,
+        );
         return !reportPeriod || !metricPeriod || metricPeriod === reportPeriod;
       })
       .map((metric) => (isPlainObject(metric)
@@ -528,8 +536,36 @@ const metricCatalogForPrompt = (profile) => getReportMetricsForProfile(profile).
   keywords: spec.keywords,
 }));
 
+const annualAnalysisPeriodRules = (year) => `
+Reguły okresu dla raportu rocznego ${year}:
+- To jest analiza pełnego roku ${year}, a nie analiza Q4 ${year}. W reportPeriod oraz period każdego metricFact wpisz dokładnie ${year}.
+- Dla metryk wynikowych, przepływowych i innych metryk z aggregation sum wybieraj wartość obejmującą pełny rok 01.01.${year}-31.12.${year}. Nie używaj samego Q4 ani zakresu 01.10.${year}-31.12.${year} jako wartości rocznej.
+- Dla metryk bilansowych i innych metryk z aggregation point_in_time wybieraj stan na koniec roku, czyli 31.12.${year}. W polu period nadal wpisz ${year}; w kontekście raportu rocznego data 31.12.${year} oznacza koniec roku, nie Q4.
+- Dla metryk z aggregation derived używaj wyłącznie danych wejściowych dotyczących tego samego pełnego roku ${year}.
+- Kolumny za ${year - 1} i inne okresy porównawcze wykorzystuj tylko do opisu zmian w summary oraz structuredSummary. Nie zwracaj ich jako metricFacts.
+- Nie sumuj kwartałów i nie twórz syntetycznej wartości rocznej z Q1-Q4. metricFact roczny musi pochodzić bezpośrednio z raportu rocznego.
+- Dla każdego metricKey zwróć najwyżej jeden metricFact za ${year}.
+`;
+
+const quarterlyAnalysisPeriodRules = `
+Reguły okresu dla raportu kwartalnego:
+- Czytaj wartości tylko z kolumny okresu głównego raportu. Przykład: w raporcie Q1 2025 zwracaj metricFacts tylko dla Q1 2025, a kolumnę Q1 2024 pomiń jako metricFacts.
+- Dla każdej metryki zwróć najwyżej jeden metricFact dla okresu raportu. Jeżeli ta sama tabela pokazuje Q1 2025 oraz Q1 2024, wybierz wyłącznie Q1 2025, gdy raport dotyczy Q1 2025.
+- Normalizuj okresy kwartalne do formatu Q1 YYYY, Q2 YYYY, Q3 YYYY albo Q4 YYYY. Równoważniki okresów to: Q1 = 31.03.YYYY lub 01.01.YYYY-31.03.YYYY; Q2 = 30.06.YYYY lub 01.04.YYYY-30.06.YYYY; Q3 = 30.09.YYYY lub 01.07.YYYY-30.09.YYYY; Q4 = 31.12.YYYY lub 01.10.YYYY-31.12.YYYY.
+- Zakresów narastających 01.01.YYYY-30.06.YYYY i 01.01.YYYY-30.09.YYYY nie traktuj jako czystych Q2 ani Q3 i nie używaj ich jako metricFacts dla raportu kwartalnego.
+- Jeżeli tabela pokazuje datę bilansową będącą końcem kwartału, w polu period wpisz kwartał, np. Q1 2026 zamiast 31.03.2026.
+- Nie twórz metricFacts dla okresów porównawczych, nawet jeżeli wartości są bezpośrednio widoczne w dokumencie.
+`;
+
+const analysisPeriodRules = (metadata) => {
+  const periods = [...new Set(metadata.map((document) => normalizeReportPeriod(document.period)).filter(Boolean))];
+  const periodInfo = periods.length === 1 ? getReportPeriodInfo(periods[0]) : null;
+  return periodInfo?.isAnnual ? annualAnalysisPeriodRules(periodInfo.year) : quarterlyAnalysisPeriodRules;
+};
+
 const buildAnalysisPrompt = ({ profile, metadata }) => {
   const catalog = metricCatalogForPrompt(profile);
+  const periodRules = analysisPeriodRules(metadata);
   return `Przeanalizuj zatwierdzone dokumenty dla aktywa poniżej. Odpowiedź musi być po polsku i wyłącznie jako JSON zgodny ze schematem.
 
 Cel pracy:
@@ -552,14 +588,10 @@ Twarde reguły:
 - quote oraz source.evidence mają być krótkimi dowodami z dokumentu, nie parafrazą bez zakotwiczenia.
 - Jeżeli numer strony nie jest dostępny w narzędziu, ustaw page na null, ale nadal wypełnij section i quote/evidence.
 - value ma być samą liczbą albo null; pełna jednostka wraz z walutą i skalą trafia tylko do unit.
-- Czytaj wartości tylko z kolumny okresu głównego raportu. Przykład: w raporcie Q1 2025 zwracaj metricFacts tylko dla Q1 2025, a kolumnę Q1 2024 pomiń jako metricFacts.
-- Dla każdej metryki zwróć najwyżej jeden metricFact dla okresu raportu. Jeżeli ta sama tabela pokazuje Q1 2025 oraz Q1 2024, wybierz wyłącznie Q1 2025, gdy raport dotyczy Q1 2025.
 - metricKey cost_of_risk oznacza wyłącznie wskaźnik CoR wyrażony w % albo bps. Nie przypisuj do niego kwot pozycji "wynik z tytułu oczekiwanych strat kredytowych", "odpisy aktualizujące" ani "koszty ryzyka prawnego". Takie kwoty nie są CoR i nie mają osobnego metricKey w katalogu.
-- Normalizuj okresy kwartalne do formatu Q1 YYYY, Q2 YYYY, Q3 YYYY albo Q4 YYYY. Równoważniki okresów to: Q1 = 31.03.YYYY lub 01.01.YYYY-31.03.YYYY; Q2 = 30.06.YYYY lub 01.04.YYYY-30.06.YYYY; Q3 = 30.09.YYYY lub 01.07.YYYY-30.09.YYYY; Q4 = 31.12.YYYY lub 01.10.YYYY-31.12.YYYY.
-- Zakresów narastających 01.01.YYYY-30.06.YYYY i 01.01.YYYY-30.09.YYYY nie traktuj jako czystych Q2 ani Q3 i nie używaj ich jako metricFacts dla raportu kwartalnego.
-- Jeżeli tabela pokazuje datę bilansową będącą końcem kwartału, w polu period wpisz kwartał, np. Q1 2026 zamiast 31.03.2026.
-- Nie twórz metricFacts dla okresów porównawczych, nawet jeżeli wartości są bezpośrednio widoczne w dokumencie.
 - Nie zwracaj rekomendacji kupna/sprzedaży.
+
+${periodRules}
 
 Reguły structuredSummary:
 - Pisz jak analityk dla człowieka: przystępnie, konkretnie i bez suchego wyliczania liczb.
@@ -602,9 +634,10 @@ export const analyzeDocumentsWithPerplexity = async ({ apiKey, profile, document
   ];
   const result = await requestCompletion({ apiKey, model: 'sonar-pro', messages, schema: ANALYSIS_SCHEMA, fetchImpl });
   const parsed = safeJson(result.content, {});
+  const documentPeriods = [...new Set(documents.map(documentReportPeriod).filter(Boolean))];
   const fallback = {
     title: `Analiza ${profile.name}`,
-    reportPeriod: documents.map(documentReportPeriod).filter(Boolean).join(', '),
+    reportPeriod: documentPeriods.length === 1 ? documentPeriods[0] : '',
     summary: result.content,
   };
   return {

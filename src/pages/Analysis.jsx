@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import useLiveData from '../hooks/useLiveData.js';
@@ -24,10 +24,23 @@ import {
   isHelperUnavailable,
 } from '../utils/analysisApi.js';
 import {
+  buildAnalysisSelectionModel,
+  createAnalysisViewSelection,
+  filterReportMetricsForSelection,
+  reduceAnalysisViewSelection,
+} from '../utils/analysisSelection.js';
+import {
   PERSISTENT_STATE_KEYS,
   hydratePersistentState,
 } from '../utils/persistentStorage.js';
 import { getReportPeriodInfo } from '../../shared/reportPeriods.js';
+import {
+  REPORT_DOCUMENT_TYPES,
+  buildManualReportMetadata,
+  getDocumentReportPeriodInfo,
+  getReportDocumentTypeLabel,
+  validateAnalysisDocumentSelection,
+} from '../../shared/reportDocuments.js';
 
 const EMPTY_VALUE = '—';
 
@@ -489,9 +502,9 @@ const AnalysisList = ({ profiles, helperStatus, helperError, budget, onRefresh, 
 };
 
 const Metric = ({ label, value, tone = 'default' }) => (
-  <div className="rounded-lg border border-slate-800/70 bg-slate-950/60 px-3 py-2.5">
+  <div className="min-w-0 rounded-lg border border-slate-800/70 bg-slate-950/60 px-3 py-2.5">
     <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-    <p className={`mt-1 font-mono text-sm font-semibold ${
+    <p className={`mt-1 break-words font-mono text-sm font-semibold ${
       tone === 'positive' ? 'text-emerald-300' : tone === 'negative' ? 'text-rose-300' : 'text-slate-100'
     }`}>{value}</p>
   </div>
@@ -508,10 +521,10 @@ const PositionSummary = ({ positions }) => {
         const metrics = getPositionMetrics(position.row, position.portfolioRows);
         const resultTone = metrics.profitLoss > 0 ? 'positive' : metrics.profitLoss < 0 ? 'negative' : 'default';
         return (
-          <div key={`${position.portfolioName}-${index}`} className="rounded-xl border border-slate-800/70 bg-slate-950/50 p-4">
+          <div key={`${position.portfolioName}-${index}`} className="min-w-0 rounded-xl border border-slate-800/70 bg-slate-950/50 p-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm font-semibold text-slate-200">{position.portfolioName}</p>
-              <Badge>{metrics.quantity === null ? 'brak liczby jednostek' : `${formatNumber(metrics.quantity, 4)} jednostek`}</Badge>
+              <Badge className="max-w-full whitespace-normal text-center">{metrics.quantity === null ? 'brak liczby jednostek' : `${formatNumber(metrics.quantity, 4)} jednostek`}</Badge>
             </div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <Metric label="Aktualna wartość" value={formatCurrency(metrics.marketValue)} />
@@ -653,17 +666,49 @@ const CandidateList = ({ candidates, helperOnline, busy, onDiscover, onApprove }
   </section>
 );
 
+const createInitialDocumentMetadata = () => ({
+  title: '',
+  type: REPORT_DOCUMENT_TYPES.QUARTERLY,
+  year: '',
+  quarter: '1',
+});
+
+const MANUAL_REPORT_FILE_TYPES = '.pdf,.html,.htm,.zip,.txt,.rtf,.csv,.doc,.docx';
+
+const formatUploadFileSize = (bytes) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+};
+
 const DocumentList = ({ documents, selectedIds, helperOnline, busy, onToggle, onImport, onDelete, getDownloadUrl, compact = false }) => {
   const inputRef = useRef(null);
-  const [metadata, setMetadata] = useState({ title: '', type: '', period: '' });
+  const [metadata, setMetadata] = useState(createInitialDocumentMetadata);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [dragActive, setDragActive] = useState(false);
+  const importMetadata = buildManualReportMetadata(metadata);
+  const selectedDocuments = documents.filter((document) => selectedIds.includes(getItemId(document)));
+  const selectedPeriodInfo = validateAnalysisDocumentSelection(selectedDocuments).periodInfo;
+  const fileSelectionDisabled = !helperOnline || busy;
+  const uploadDisabled = fileSelectionDisabled || !selectedFile || !importMetadata.valid;
 
-  const upload = async (event) => {
-    const [file] = event.target.files || [];
-    event.target.value = '';
-    if (!file) return;
+  const chooseFile = (file) => {
+    if (!file || fileSelectionDisabled) return;
+    setSelectedFile(file);
+  };
+
+  const upload = async () => {
+    if (uploadDisabled) return;
     try {
-      await onImport(file, metadata);
-      setMetadata({ title: '', type: '', period: '' });
+      const result = await onImport(selectedFile, {
+        title: importMetadata.title,
+        type: importMetadata.type,
+        period: importMetadata.period,
+      });
+      if (result) {
+        setMetadata(createInitialDocumentMetadata());
+        setSelectedFile(null);
+      }
     } catch {
       // The invoking page displays the error in a single, visible location.
     }
@@ -677,41 +722,148 @@ const DocumentList = ({ documents, selectedIds, helperOnline, busy, onToggle, on
           <p className="mt-1 text-xs leading-5 text-slate-500">
             Zaznaczone dokumenty trafią do Perplexity dopiero po kliknięciu „Analizuj”.
           </p>
-          <SecondaryButton disabled={!helperOnline || busy} onClick={() => inputRef.current?.click()} className="mt-3 w-full">
-            Wgraj raport ręcznie
-          </SecondaryButton>
         </div>
       ) : (
         <SectionHeading
           title="Archiwum dokumentów"
           description="Oryginalny PDF, HTML lub ZIP pozostaje lokalnie. Zaznaczone dokumenty są wysyłane do Perplexity dopiero po kliknięciu „Analizuj”."
-          action={(
-            <SecondaryButton disabled={!helperOnline || busy} onClick={() => inputRef.current?.click()}>
-              Wgraj raport ręcznie
-            </SecondaryButton>
-          )}
         />
       )}
-      <input ref={inputRef} type="file" accept=".pdf,.html,.htm,.zip,.txt,.doc,.docx" className="hidden" onChange={upload} />
-      <div className={`mb-4 grid gap-2 rounded-xl border border-slate-800/70 bg-slate-950/50 p-3 ${compact ? '' : 'md:grid-cols-3'}`}>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={MANUAL_REPORT_FILE_TYPES}
+        className="hidden"
+        onChange={(event) => {
+          const [file] = event.target.files || [];
+          event.target.value = '';
+          chooseFile(file);
+        }}
+      />
+      <div className={`mb-4 grid gap-2 rounded-xl border border-slate-800/70 bg-slate-950/50 p-3 ${compact ? '' : 'md:grid-cols-2'}`}>
+        <div className={compact ? '' : 'md:col-span-2'}>
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-400">Ręczne wgrywanie raportu</p>
+          <p className="mt-1 text-xs leading-5 text-slate-500">Ustaw typ i okres raportu, a następnie dodaj plik do lokalnego archiwum.</p>
+        </div>
         <input
           value={metadata.title}
           onChange={(event) => setMetadata((current) => ({ ...current, title: event.target.value }))}
           placeholder="Tytuł (opcjonalnie)"
           className="rounded-lg border border-slate-700/70 bg-slate-900 px-3 py-2 text-xs text-slate-100 outline-none placeholder:text-slate-600 focus:border-blue-500"
         />
-        <input
+        <select
           value={metadata.type}
-          onChange={(event) => setMetadata((current) => ({ ...current, type: event.target.value }))}
-          placeholder="Typ, np. raport kwartalny"
+          onChange={(event) => setMetadata((current) => ({
+            ...current,
+            type: event.target.value,
+            year: '',
+            quarter: '1',
+          }))}
+          aria-label="Typ dokumentu"
           className="rounded-lg border border-slate-700/70 bg-slate-900 px-3 py-2 text-xs text-slate-100 outline-none placeholder:text-slate-600 focus:border-blue-500"
-        />
-        <input
-          value={metadata.period}
-          onChange={(event) => setMetadata((current) => ({ ...current, period: event.target.value }))}
-          placeholder="Okres, np. Q1 2026"
-          className="rounded-lg border border-slate-700/70 bg-slate-900 px-3 py-2 text-xs text-slate-100 outline-none placeholder:text-slate-600 focus:border-blue-500"
-        />
+        >
+          <option value={REPORT_DOCUMENT_TYPES.ANNUAL}>Raport roczny</option>
+          <option value={REPORT_DOCUMENT_TYPES.QUARTERLY}>Raport kwartalny</option>
+          <option value={REPORT_DOCUMENT_TYPES.OTHER}>Inny dokument</option>
+        </select>
+        {metadata.type !== REPORT_DOCUMENT_TYPES.OTHER && (
+          <input
+            type="number"
+            min="1900"
+            max="2099"
+            inputMode="numeric"
+            value={metadata.year}
+            onChange={(event) => setMetadata((current) => ({ ...current, year: event.target.value }))}
+            placeholder="Rok, np. 2025"
+            aria-label="Rok raportu"
+            className="rounded-lg border border-slate-700/70 bg-slate-900 px-3 py-2 text-xs text-slate-100 outline-none placeholder:text-slate-600 focus:border-blue-500"
+          />
+        )}
+        {metadata.type === REPORT_DOCUMENT_TYPES.QUARTERLY && (
+          <select
+            value={metadata.quarter}
+            onChange={(event) => setMetadata((current) => ({ ...current, quarter: event.target.value }))}
+            aria-label="Kwartał raportu"
+            className="rounded-lg border border-slate-700/70 bg-slate-900 px-3 py-2 text-xs text-slate-100 outline-none focus:border-blue-500"
+          >
+            <option value="1">Q1</option>
+            <option value="2">Q2</option>
+            <option value="3">Q3</option>
+            <option value="4">Q4</option>
+          </select>
+        )}
+        <p className={`text-xs leading-5 ${importMetadata.valid ? 'text-slate-500' : 'text-amber-300'} ${compact ? '' : 'md:col-span-2'}`}>
+          {metadata.type === REPORT_DOCUMENT_TYPES.OTHER
+            ? 'Inny dokument zostanie zapisany bez okresu i nie będzie samodzielną podstawą analizy.'
+            : importMetadata.valid
+              ? `Okres raportowy: ${importMetadata.period}`
+              : importMetadata.message}
+        </p>
+      </div>
+      <div className="mb-5">
+        <button
+          type="button"
+          disabled={fileSelectionDisabled}
+          onClick={() => inputRef.current?.click()}
+          onDragEnter={(event) => {
+            event.preventDefault();
+            if (!fileSelectionDisabled) setDragActive(true);
+          }}
+          onDragOver={(event) => {
+            event.preventDefault();
+            if (!fileSelectionDisabled) setDragActive(true);
+          }}
+          onDragLeave={(event) => {
+            event.preventDefault();
+            if (!event.currentTarget.contains(event.relatedTarget)) setDragActive(false);
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            setDragActive(false);
+            chooseFile(event.dataTransfer.files?.[0]);
+          }}
+          className={`flex min-h-28 w-full flex-col items-center justify-center rounded-lg border border-dashed px-4 py-5 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/35 ${
+            dragActive
+              ? 'border-blue-400 bg-blue-500/10'
+              : selectedFile
+                ? 'border-emerald-500/40 bg-emerald-500/5 hover:border-emerald-400/60'
+                : 'border-slate-700 bg-slate-950/45 hover:border-blue-400/60 hover:bg-blue-500/5'
+          } disabled:cursor-not-allowed disabled:opacity-50`}
+          aria-label={selectedFile ? `Zmień wybrany plik ${selectedFile.name}` : 'Wybierz plik raportu lub przeciągnij go tutaj'}
+        >
+          {selectedFile ? (
+            <>
+              <span className="max-w-full break-words text-sm font-semibold text-emerald-200">{selectedFile.name}</span>
+              <span className="mt-1 text-xs text-slate-500">{formatUploadFileSize(selectedFile.size)} · kliknij, aby wybrać inny plik</span>
+            </>
+          ) : (
+            <>
+              <span className="text-sm font-semibold text-slate-200">Przeciągnij plik tutaj</span>
+              <span className="mt-1 text-xs text-slate-500">lub kliknij, aby wybrać PDF, ZIP, HTML, DOCX, TXT, RTF albo CSV</span>
+            </>
+          )}
+        </button>
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <p className={`text-xs leading-5 ${uploadDisabled ? 'text-slate-500' : 'text-emerald-300'}`}>
+            {!helperOnline
+              ? 'Lokalny helper jest offline.'
+              : !selectedFile
+                ? 'Wybierz plik raportu.'
+                : !importMetadata.valid
+                  ? importMetadata.message
+                  : `${selectedFile.name} jest gotowy do wgrania jako ${importMetadata.period || getReportDocumentTypeLabel(importMetadata.type)}.`}
+          </p>
+          <div className="flex shrink-0 gap-2">
+            {selectedFile && (
+              <SecondaryButton disabled={busy} onClick={() => setSelectedFile(null)}>
+                Usuń wybór
+              </SecondaryButton>
+            )}
+            <PrimaryButton disabled={uploadDisabled} onClick={upload}>
+              Wgraj do archiwum
+            </PrimaryButton>
+          </div>
+        </div>
       </div>
       {documents?.length ? (
         <div className="space-y-2">
@@ -719,6 +871,16 @@ const DocumentList = ({ documents, selectedIds, helperOnline, busy, onToggle, on
             const documentId = getItemId(document) || String(index);
             const title = document.title || document.name || document.fileName || 'Dokument';
             const isSelected = selectedIds.includes(documentId);
+            const documentPeriodInfo = getDocumentReportPeriodInfo(document);
+            const rawPeriod = document.period || document.reportingPeriod || '';
+            const periodBlockReason = !rawPeriod
+              ? 'Dokument nie ma jawnie podanego okresu raportowego.'
+              : !documentPeriodInfo
+                ? 'Okres dokumentu musi mieć format YYYY albo Q1-Q4 YYYY.'
+                : selectedPeriodInfo && selectedPeriodInfo.key !== documentPeriodInfo.key
+                  ? `Wybrane dokumenty dotyczą okresu ${selectedPeriodInfo.label}.`
+                  : '';
+            const selectionDisabled = !isSelected && (document.analyzable === false || Boolean(periodBlockReason));
             return (
               <div key={documentId} className={`flex flex-col gap-3 rounded-xl border p-3 ${compact ? '' : 'lg:flex-row lg:items-center lg:justify-between'} ${isSelected ? 'border-blue-500/35 bg-blue-500/5' : 'border-slate-800/70 bg-slate-950/50'}`}>
                 <label className="flex min-w-0 cursor-pointer items-start gap-3">
@@ -726,19 +888,23 @@ const DocumentList = ({ documents, selectedIds, helperOnline, busy, onToggle, on
                     type="checkbox"
                     checked={isSelected}
                     onChange={() => onToggle(documentId)}
-                    disabled={document.analyzable === false}
+                    disabled={selectionDisabled}
+                    title={periodBlockReason || undefined}
                     className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-900 text-blue-600 focus:ring-blue-500"
                   />
                   <span className="min-w-0">
                     <span className="flex flex-wrap items-center gap-2">
                       <span className="truncate text-sm font-semibold text-slate-200">{title}</span>
-                      {document.type && <Badge>{document.type}</Badge>}
+                      {document.type && <Badge>{getReportDocumentTypeLabel(document.type)}</Badge>}
                       {document.format && <Badge>{String(document.format).toUpperCase()}</Badge>}
                       <Badge status={document.status}>{getStatusLabel(document.status)}</Badge>
                     </span>
                     <span className="mt-1 block break-words text-xs text-slate-500">
                       {[document.period || document.reportingPeriod, document.publishedAt && formatDate(document.publishedAt), (document.sha256 || document.hash) && `hash: ${String(document.sha256 || document.hash).slice(0, 10)}…`, document.analyzable === false && 'archiwum — wybierz rozpakowany plik'].filter(Boolean).join(' · ') || 'Brak metadanych'}
                     </span>
+                    {periodBlockReason && !isSelected && (
+                      <span className="mt-1 block text-xs text-amber-300">{periodBlockReason}</span>
+                    )}
                   </span>
                 </label>
                 <div className={`flex shrink-0 flex-wrap gap-2 ${compact ? 'pl-7' : ''}`}>
@@ -1159,48 +1325,7 @@ const sortPeriods = (left, right) => {
   return left.label.localeCompare(right.label, 'pl');
 };
 
-const getAnalysisTime = (analysis) => {
-  const date = new Date(analysis?.approvedAt || analysis?.updatedAt || analysis?.createdAt || 0);
-  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
-};
-
-const sortAnalysesByRecency = (left, right) => (
-  getAnalysisTime(right) - getAnalysisTime(left)
-  || getAnalysisTitle(right).localeCompare(getAnalysisTitle(left), 'pl')
-);
-
-const getAnalysisReportPeriodInfo = (analysis) => {
-  const content = getAnalysisContent(analysis);
-  const period = content.reportPeriod || analysis?.reportPeriod || analysis?.period || '';
-  return period ? getMetricPeriodInfo(period) : null;
-};
-
-const buildAnalysisPeriodOptions = (analyses) => {
-  const periods = new Map();
-  analyses.forEach((analysis) => {
-    const periodInfo = getAnalysisReportPeriodInfo(analysis);
-    if (!periodInfo) return;
-    const current = periods.get(periodInfo.key);
-    if (!current || getAnalysisTime(analysis) > current.latestTime) {
-      periods.set(periodInfo.key, {
-        ...periodInfo,
-        latestTime: getAnalysisTime(analysis),
-        analysisCount: (current?.analysisCount || 0) + 1,
-      });
-    } else if (current) {
-      current.analysisCount += 1;
-    }
-  });
-  return [...periods.values()].sort(sortPeriods);
-};
-
-const getLatestAnalysisForPeriod = (analyses, periodKey) => (
-  [...analyses]
-    .filter((analysis) => getAnalysisReportPeriodInfo(analysis)?.key === periodKey)
-    .sort(sortAnalysesByRecency)[0] || null
-);
-
-const buildMetricTable = (metrics, specs, { aggregateAnnual = false } = {}) => {
+const buildMetricTable = (metrics, specs) => {
   const rows = specs.map((spec) => ({ spec, values: new Map() }));
   const byLabel = new Map(rows.map((row) => [row.spec.label, row]));
   const periods = new Map();
@@ -1214,43 +1339,6 @@ const buildMetricTable = (metrics, specs, { aggregateAnnual = false } = {}) => {
     byLabel.get(spec.label).values.set(periodInfo.key, normalizeMetricCell(metric, spec));
   });
 
-  if (aggregateAnnual) {
-    rows.forEach((row) => {
-      const byYear = new Map();
-      [...row.values.entries()].forEach(([key, cell]) => {
-        const periodInfo = periods.get(key);
-        if (!periodInfo?.isQuarter) return;
-        if (!byYear.has(periodInfo.year)) byYear.set(periodInfo.year, new Map());
-        byYear.get(periodInfo.year).set(periodInfo.quarter, cell);
-      });
-
-      byYear.forEach((quarters, year) => {
-        if (![1, 2, 3, 4].every((quarter) => quarters.has(quarter))) return;
-        const key = `FY:${year}`;
-        const periodInfo = { key, label: `${year}`, year, quarter: 5, isSynthetic: true };
-        periods.set(key, periodInfo);
-
-        if (row.spec.aggregation === 'sum') {
-          const amountPln = [1, 2, 3, 4].reduce((total, quarter) => total + (quarters.get(quarter).amountPln || 0), 0);
-          row.values.set(key, {
-            display: formatMlnPln(amountPln),
-            amountPln,
-            note: 'suma Q1-Q4',
-            source: '',
-            trend: '',
-          });
-        }
-
-        if (row.spec.aggregation === 'q4') {
-          row.values.set(key, {
-            ...quarters.get(4),
-            note: 'stan na koniec Q4',
-          });
-        }
-      });
-    });
-  }
-
   const sortedPeriods = [...periods.values()].sort(sortPeriods);
   return {
     periods: sortedPeriods.length ? sortedPeriods : [{ key: 'current', label: 'Wartość', isSynthetic: false }],
@@ -1258,8 +1346,8 @@ const buildMetricTable = (metrics, specs, { aggregateAnnual = false } = {}) => {
   };
 };
 
-const FinancialMetricTable = ({ title, description, metrics, specs, aggregateAnnual = false }) => {
-  const table = buildMetricTable(metrics, specs, { aggregateAnnual });
+const FinancialMetricTable = ({ title, description, metrics, specs }) => {
+  const table = buildMetricTable(metrics, specs);
 
   return (
     <div>
@@ -1276,7 +1364,6 @@ const FinancialMetricTable = ({ title, description, metrics, specs, aggregateAnn
                 {table.periods.map((period) => (
                   <th key={period.key} className="min-w-40 px-3 py-3">
                     <span>{period.label}</span>
-                    {period.isSynthetic && <span className="ml-2 rounded border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-300">rok</span>}
                   </th>
                 ))}
               </tr>
@@ -1324,10 +1411,9 @@ const MetricMatrix = ({ metrics }) => (
     />
     <FinancialMetricTable
       title="Wyniki finansowe"
-      description="Kwoty są normalizowane do mln PLN. Dla kompletu Q1-Q4 dodawana jest kolumna roczna: suma dla wyników i przepływów, stan Q4 dla pozycji bilansowych."
+      description="Kwoty są normalizowane do mln PLN. Kolumna roczna pojawia się wyłącznie wtedy, gdy metryki pochodzą bezpośrednio z zatwierdzonego raportu rocznego."
       metrics={metrics}
       specs={FINANCIAL_RESULT_SPECS}
-      aggregateAnnual
     />
   </div>
 );
@@ -1480,7 +1566,7 @@ const ApprovedReportMetricMatrix = ({ metrics }) => {
     <div>
       <SectionHeading
         title="Metryki"
-        description="Jedna macierz zatwierdzonych metryk raportowych dla wszystkich zapisanych okresów. Każda komórka zachowuje źródło z dokumentu."
+        description="Pełne lata są widoczne domyślnie. Dodatkowe kwartały włączysz ikoną oka w zakresie analizy."
       />
       {table.rows.length ? (
         <div className="overflow-hidden rounded-xl border border-slate-800/80">
@@ -1490,7 +1576,17 @@ const ApprovedReportMetricMatrix = ({ metrics }) => {
                 <tr>
                   <th className="sticky left-0 z-10 min-w-56 bg-slate-950/95 px-3 py-3">Metryka</th>
                   {table.periods.map((period) => (
-                    <th key={period.key} className="min-w-64 px-3 py-3">{period.label}</th>
+                    <th
+                      key={period.key}
+                      className={`min-w-64 px-3 py-3 ${period.isAnnual ? 'border-x border-emerald-500/15 bg-emerald-500/[0.06] text-emerald-200' : ''}`}
+                    >
+                      <span>{period.label}</span>
+                      {period.isAnnual && (
+                        <span className="ml-2 inline-flex rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-bold lowercase text-emerald-300">
+                          roczny
+                        </span>
+                      )}
+                    </th>
                   ))}
                 </tr>
               </thead>
@@ -1505,7 +1601,10 @@ const ApprovedReportMetricMatrix = ({ metrics }) => {
                     {table.periods.map((period) => {
                       const metric = row.values.get(period.key);
                       return (
-                        <td key={`${row.key}-${period.key}`} className="px-3 py-3 align-top text-slate-200">
+                        <td
+                          key={`${row.key}-${period.key}`}
+                          className={`px-3 py-3 align-top text-slate-200 ${period.isAnnual ? 'border-x border-emerald-500/10 bg-emerald-500/[0.035]' : ''}`}
+                        >
                           {metric ? (
                             <div>
                               <MetricValueWithSource
@@ -1527,7 +1626,7 @@ const ApprovedReportMetricMatrix = ({ metrics }) => {
             </table>
           </div>
         </div>
-      ) : <EmptyState>Brak zatwierdzonych metryk. Zaakceptuj szkic analizy, aby zapisać fakty raportowe w tabeli.</EmptyState>}
+      ) : <EmptyState>Brak zatwierdzonych metryk dla widocznych okresów. Włącz kwartał ikoną oka albo zatwierdź analizę roczną.</EmptyState>}
     </div>
   );
 };
@@ -1565,51 +1664,161 @@ const SourceBackedList = ({ title, tone = 'default', items }) => {
   );
 };
 
-const AnalysisPeriodSelector = ({ options = [], selectedPeriodKey, onChange }) => {
+const AnalysisEyeIcon = ({ visible }) => (
+  <svg aria-hidden="true" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12s3.5-6.25 9.75-6.25S21.75 12 21.75 12 18.25 18.25 12 18.25 2.25 12 2.25 12Z" />
+    <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 12a2.25 2.25 0 1 0 4.5 0 2.25 2.25 0 0 0-4.5 0Z" />
+    {!visible && <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 19.5 19.5 4.5" />}
+  </svg>
+);
+
+const AnalysisReportSelector = ({
+  selectionModel,
+  selectedReportAnalysisId,
+  visibleQuarterMetricAnalysisIds,
+  onReportChange,
+  onQuarterMetricToggle,
+}) => {
   const [open, setOpen] = useState(false);
-  if (!options.length) return null;
-  const selected = options.find((option) => option.key === selectedPeriodKey) || options[0];
-  return (
-    <div className="relative mb-4 block max-w-xs">
-      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Okres podglądu</p>
+  const containerRef = useRef(null);
+  const triggerRef = useRef(null);
+  const menuId = 'analysis-report-selector-menu';
+  const reportGroups = selectionModel?.reportGroups || [];
+  const reportOptions = selectionModel?.reportOptions || [];
+  const selectedReport = reportOptions.find((option) => option.analysisId === selectedReportAnalysisId) || null;
+  const visibleQuarterIds = new Set(visibleQuarterMetricAnalysisIds || []);
+  const activeLabel = selectedReport?.label || 'Brak wybranego raportu';
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handlePointerDown = (event) => {
+      if (!containerRef.current?.contains(event.target)) setOpen(false);
+    };
+    const handleKeyDown = (event) => {
+      if (event.key !== 'Escape') return;
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
+
+  if (!reportGroups.length) return null;
+
+  const renderQuarterOption = (option) => {
+    const metricsVisible = visibleQuarterIds.has(option.analysisId);
+    const active = option.analysisId === selectedReportAnalysisId;
+    const isDraft = option.kind === 'draft';
+    const versionDate = formatDate(
+      option.analysis?.updatedAt || option.analysis?.createdAt,
+      { withTime: true },
+    );
+    return (
+      <div
+        key={option.analysisId}
+        className={`flex items-stretch rounded-lg border transition-colors ${active ? 'border-blue-400/35 bg-blue-500/10' : 'border-transparent hover:border-slate-700/80 hover:bg-slate-900'}`}
+      >
+        <button
+          type="button"
+          onClick={() => {
+            onReportChange(option.analysisId);
+            setOpen(false);
+          }}
+          className={`min-w-0 flex-1 px-3 py-2.5 text-left ${active ? 'text-blue-100' : 'text-slate-300'}`}
+        >
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold">
+            <span>{option.label}</span>
+            <span className={`text-[11px] font-bold uppercase ${isDraft ? 'text-amber-300' : 'text-emerald-300'}`}>
+              {isDraft ? 'szkic' : 'zatwierdzony'}
+            </span>
+          </span>
+          {isDraft && (
+            <span className="mt-1 block break-words text-xs leading-5 text-slate-500">
+              {option.title} · {versionDate}
+            </span>
+          )}
+        </button>
+        <button
+          type="button"
+          aria-pressed={metricsVisible}
+          aria-label={`${metricsVisible ? 'Ukryj' : 'Pokaż'} kolumnę metryk dla ${option.label}`}
+          title={`${metricsVisible ? 'Ukryj' : 'Pokaż'} kolumnę metryk ${option.label}`}
+          onClick={() => onQuarterMetricToggle(option.analysisId)}
+          className={`m-1.5 inline-flex w-9 shrink-0 items-center justify-center rounded-md border transition-colors ${metricsVisible ? 'border-blue-400/40 bg-blue-500/15 text-blue-200' : 'border-slate-700/70 bg-slate-950/60 text-slate-500 hover:text-slate-200'}`}
+        >
+          <AnalysisEyeIcon visible={metricsVisible} />
+        </button>
+      </div>
+    );
+  };
+
+  const renderAnnualOption = (option) => {
+    const active = option.analysisId === selectedReportAnalysisId;
+    return (
       <button
+        key={option.analysisId}
+        type="button"
+        onClick={() => {
+          onReportChange(option.analysisId);
+          setOpen(false);
+        }}
+        className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors ${active ? 'border-blue-400/35 bg-blue-500/10 font-bold text-blue-100' : 'border-transparent text-slate-300 hover:border-slate-700/80 hover:bg-slate-900'}`}
+      >
+        <span>{option.label}</span>
+        <span className="text-[11px] font-bold uppercase text-emerald-300">raport roczny</span>
+      </button>
+    );
+  };
+
+  return (
+    <div ref={containerRef} className="relative mb-5 w-full sm:max-w-md">
+      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Zakres analizy</p>
+      <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="mt-2 flex w-full items-center justify-between gap-3 rounded-xl border border-slate-700/80 bg-slate-950 px-3 py-2 text-left text-sm font-semibold text-slate-100 shadow-inner shadow-slate-950/50 transition-colors hover:border-blue-400/50 focus-visible:border-blue-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/25"
-        aria-haspopup="listbox"
+        className="mt-2 flex min-h-12 w-full items-center justify-between gap-3 rounded-lg border border-slate-700/80 bg-slate-950 px-3 py-2 text-left text-sm text-slate-100 shadow-inner shadow-slate-950/50 transition-colors hover:border-blue-400/50 focus-visible:border-blue-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/25"
+        aria-haspopup="dialog"
         aria-expanded={open}
+        aria-controls={menuId}
       >
-        <span>{selected?.label || 'Wybierz okres'}</span>
-        <span className={`text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`}>⌄</span>
+        <span className="min-w-0">
+          <span className="block truncate font-semibold">Aktywny raport: {activeLabel}</span>
+          <span className="mt-0.5 block text-xs text-slate-500">
+            {visibleQuarterIds.size
+              ? `Widoczne kwartały w metrykach: ${visibleQuarterIds.size}`
+              : 'Bez dodatkowych kwartałów w metrykach'}
+          </span>
+        </span>
+        <span aria-hidden="true" className={`shrink-0 text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`}>⌄</span>
       </button>
       {open && (
         <div
-          role="listbox"
-          className="absolute left-0 top-full z-50 mt-2 max-h-64 w-full overflow-y-auto rounded-xl border border-slate-700/80 bg-slate-950 p-1 shadow-2xl shadow-slate-950/60"
+          id={menuId}
+          role="dialog"
+          aria-label="Wybór aktywnego raportu i widocznych kwartałów w metrykach"
+          className="absolute left-0 top-full z-50 mt-2 max-h-[min(70vh,36rem)] w-full overflow-y-auto rounded-lg border border-slate-700/80 bg-slate-950 p-3 shadow-2xl shadow-slate-950/60 sm:min-w-[28rem]"
         >
-          {options.map((option) => {
-            const isSelected = option.key === selected?.key;
-            return (
-              <button
-                key={option.key}
-                type="button"
-                role="option"
-                aria-selected={isSelected}
-                onClick={() => {
-                  onChange(option.key);
-                  setOpen(false);
-                }}
-                className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition-colors ${
-                  isSelected
-                    ? 'bg-blue-500/15 font-bold text-blue-100'
-                    : 'text-slate-300 hover:bg-slate-800/80 hover:text-slate-100'
-                }`}
-              >
-                <span>{option.label}</span>
-                {isSelected && <span className="text-xs text-blue-300">wybrany</span>}
-              </button>
-            );
-          })}
+          <p className="px-1 text-xs leading-5 text-slate-500">
+            Kliknij raport, aby zmienić treść widoku. Oko przy kwartale steruje wyłącznie dodatkową kolumną w tabeli metryk.
+          </p>
+          <div className="mt-3 space-y-4">
+            {reportGroups.map((group) => (
+              <section key={group.year} aria-labelledby={`analysis-report-year-${group.year}`}>
+                <h3 id={`analysis-report-year-${group.year}`} className="mb-1 px-1 text-xs font-bold text-slate-300">
+                  {group.year}
+                </h3>
+                <div className="space-y-1">
+                  {group.annualOptions.map(renderAnnualOption)}
+                  {[...group.approvedQuarterOptions, ...group.quarterDraftOptions].map(renderQuarterOption)}
+                </div>
+              </section>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -1620,18 +1829,29 @@ const AnalysisPreview = ({
   analysis,
   reportMetrics,
   positions,
-  periodOptions,
-  selectedPeriodKey,
-  onPeriodChange,
+  selectionModel,
+  selectedReportAnalysisId,
+  visibleQuarterMetricAnalysisIds,
+  onReportChange,
+  onQuarterMetricToggle,
+  isolatedPreview,
+  onClosePreview,
+  extractionWarnings,
   helperOnline,
   busy,
   onApprove,
 }) => {
   if (!analysis) {
     return (
-      <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
+      <section className="min-w-0 max-w-full overflow-hidden rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
         <SectionHeading title="Wynik analizy" description="Po uruchomieniu analizy zobaczysz szkic przed jego zapisaniem w historii." />
-        <AnalysisPeriodSelector options={periodOptions} selectedPeriodKey={selectedPeriodKey} onChange={onPeriodChange} />
+        <AnalysisReportSelector
+          selectionModel={selectionModel}
+          selectedReportAnalysisId={selectedReportAnalysisId}
+          visibleQuarterMetricAnalysisIds={visibleQuarterMetricAnalysisIds}
+          onReportChange={onReportChange}
+          onQuarterMetricToggle={onQuarterMetricToggle}
+        />
         <PositionSummaryPanel positions={positions} />
         <ApprovedReportMetricMatrix metrics={reportMetrics} />
         <EmptyState>Brak szkicu lub zatwierdzonej analizy dla wybranych dokumentów.</EmptyState>
@@ -1647,18 +1867,26 @@ const AnalysisPreview = ({
   const insights = getAnalysisItems(analysis, ['conclusions', 'keyTakeaways', 'insights', 'findings']);
   const risks = getAnalysisItems(analysis, ['risks', 'riskFactors']);
   const metrics = getAnalysisItems(analysis, ['metrics', 'keyMetrics']);
+  const metricsForReportPeriod = filterReportMetricFactsForPeriod(metrics, reportPeriod);
   const citations = getAnalysisItems(analysis, ['sources', 'citations', 'evidence']);
   const hasV2MetricFacts = metricFacts.length > 0;
 
   return (
-    <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
+    <section className="min-w-0 max-w-full overflow-hidden rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
       <SectionHeading
-        title={isDraft ? 'Podgląd szkicu analizy' : 'Podgląd analizy'}
-        description={`Schemat ${analysis.schemaVersion || analysis.version || 'v1'} · ${analysis.model || analysis.provider || 'lokalna analiza'} · ${formatDate(analysis.createdAt || analysis.updatedAt, { withTime: true })}`}
-        action={isDraft && (
-          <PrimaryButton disabled={!helperOnline || busy || !analysisId} onClick={() => onApprove(analysisId)}>
-            Zatwierdź i zapisz
-          </PrimaryButton>
+        title={isolatedPreview ? 'Izolowany podgląd analizy' : isDraft ? 'Podgląd szkicu analizy' : 'Podgląd analizy'}
+        description={isolatedPreview
+          ? `Wyświetlasz wyłącznie dane zapisane w tej wersji · ${formatDate(analysis.createdAt || analysis.updatedAt, { withTime: true })}`
+          : `Schemat ${analysis.schemaVersion || analysis.version || 'v1'} · ${analysis.model || analysis.provider || 'lokalna analiza'} · ${formatDate(analysis.createdAt || analysis.updatedAt, { withTime: true })}`}
+        action={(isolatedPreview || isDraft) && (
+          <div className="flex flex-wrap items-center gap-2">
+            {isolatedPreview && <SecondaryButton onClick={onClosePreview}>Wróć do widoku instrumentu</SecondaryButton>}
+            {isDraft && (
+              <PrimaryButton disabled={!helperOnline || busy || !analysisId} onClick={() => onApprove(analysisId)}>
+                Zatwierdź i zapisz
+              </PrimaryButton>
+            )}
+          </div>
         )}
       />
       <div className="mb-4 flex flex-wrap gap-2">
@@ -1666,25 +1894,35 @@ const AnalysisPreview = ({
         {analysis.costUsd !== undefined && <Badge>Koszt: {formatUsd(analysis.costUsd)}</Badge>}
         {analysis.documentIds?.length && <Badge>Dokumenty: {analysis.documentIds.length}</Badge>}
       </div>
-      <AnalysisPeriodSelector options={periodOptions} selectedPeriodKey={selectedPeriodKey} onChange={onPeriodChange} />
+      {!isolatedPreview && (
+        <AnalysisReportSelector
+          selectionModel={selectionModel}
+          selectedReportAnalysisId={selectedReportAnalysisId}
+          visibleQuarterMetricAnalysisIds={visibleQuarterMetricAnalysisIds}
+          onReportChange={onReportChange}
+          onQuarterMetricToggle={onQuarterMetricToggle}
+        />
+      )}
       <div className="space-y-5 text-sm leading-6 text-slate-300">
-        <PositionSummaryPanel positions={positions} />
+        {!isolatedPreview && <PositionSummaryPanel positions={positions} />}
         <SummaryPanel analysis={analysis} />
-        <ApprovedReportMetricMatrix metrics={reportMetrics} />
         <SourceBackedList title="Wnioski" items={insights} />
-        {hasV2MetricFacts && isDraft && (
+        <SourceBackedList title="Ryzyka" tone="risk" items={risks} />
+        {!isolatedPreview && <ApprovedReportMetricMatrix metrics={reportMetrics} />}
+        {hasV2MetricFacts && (isDraft || isolatedPreview) && (
           <div>
-            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Metryki ze szkicu do zatwierdzenia</p>
+            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">
+              {isolatedPreview ? 'Metryki z analizy' : 'Metryki ze szkicu do zatwierdzenia'}
+            </p>
             <DraftMetricFactsTable metrics={metricFacts} />
           </div>
         )}
-        {!hasV2MetricFacts && metrics.length > 0 && !reportMetrics?.length && (
+        {!hasV2MetricFacts && metricsForReportPeriod.length > 0 && (isolatedPreview || !reportMetrics?.length) && (
           <div>
             <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Metryki z analizy</p>
-            <MetricMatrix metrics={metrics} />
+            <MetricMatrix metrics={metricsForReportPeriod} />
           </div>
         )}
-        <SourceBackedList title="Ryzyka" tone="risk" items={risks} />
         {citations.length > 0 && (
           <div>
             <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Dowody i źródła</p>
@@ -1695,6 +1933,12 @@ const AnalysisPreview = ({
                 return url ? <a key={`${url}-${index}`} href={url} target="_blank" rel="noreferrer" className="block rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2 text-blue-300 hover:underline">{label}</a> : <p key={`${String(label)}-${index}`} className="rounded-lg border border-slate-800/70 bg-slate-950/40 px-3 py-2">{label}</p>;
               })}
             </div>
+          </div>
+        )}
+        {extractionWarnings?.length > 0 && (
+          <div>
+            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-amber-300">Ostrzeżenia</p>
+            <ExtractionWarningsButton warnings={extractionWarnings} />
           </div>
         )}
       </div>
@@ -1787,14 +2031,13 @@ const ExtractionWarningsButton = ({ warnings }) => {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-200 shadow-lg shadow-slate-950/30 transition-colors hover:border-amber-300/60 hover:bg-amber-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/35"
+        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-200 transition-colors hover:border-amber-300/60 hover:bg-amber-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/35"
         aria-label={`Ostrzeżenia ekstrakcji: ${warnings.length}`}
         title="Ostrzeżenia ekstrakcji"
       >
         <WarningTriangleIcon />
-        <span className="absolute -mt-8 ml-7 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-400 px-1 text-[10px] font-bold leading-none text-slate-950">
-          {warnings.length}
-        </span>
+        <span>Ostrzeżenia ekstrakcji</span>
+        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-400 px-1 text-[10px] font-bold leading-none text-slate-950">{warnings.length}</span>
       </button>
       {open && createPortal(
         <div className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
@@ -1814,7 +2057,7 @@ const ExtractionWarningsButton = ({ warnings }) => {
             <div className="space-y-3">
               {warnings.map((warning, index) => {
                 const isObject = warning && typeof warning === 'object';
-                const label = isObject ? warning.label || warning.metricKey || `Ostrzezenie ${index + 1}` : `Ostrzezenie ${index + 1}`;
+                const label = isObject ? warning.label || warning.metricKey || `Ostrzeżenie ${index + 1}` : `Ostrzeżenie ${index + 1}`;
                 const metricKey = isObject ? warning.metricKey : '';
                 const reason = isObject ? warning.reason || warning.text || warning.value || '' : String(warning);
                 const source = isObject ? warning.source || {} : {};
@@ -1896,6 +2139,7 @@ const AnalysisSettingsModal = ({
   open,
   profile,
   selectedDocumentIds,
+  documentSelection,
   helperOnline,
   loading,
   busy,
@@ -1949,15 +2193,17 @@ const AnalysisSettingsModal = ({
                 <div className="grid gap-2 sm:grid-cols-2">
                   <SecondaryButton disabled={!helperOnline || busy || loading} onClick={onRefresh}>Odśwież dane</SecondaryButton>
                   <PrimaryButton
-                    disabled={!helperOnline || busy || selectedDocumentIds.length === 0}
+                    disabled={!helperOnline || busy || !documentSelection.valid}
                     onClick={onRunAnalysis}
-                    title={selectedDocumentIds.length === 0 ? 'Zaznacz co najmniej jeden zarchiwizowany dokument.' : undefined}
+                    title={!documentSelection.valid ? documentSelection.message : undefined}
                   >
                     Analizuj {selectedDocumentIds.length ? `(${selectedDocumentIds.length})` : ''}
                   </PrimaryButton>
                 </div>
-                <p className="mt-3 text-xs leading-5 text-slate-500">
-                  Zaznaczone dokumenty: {selectedDocumentIds.length}. Analiza korzysta z lokalnego archiwum i zapisanych źródeł.
+                <p className={`mt-3 text-xs leading-5 ${documentSelection.valid ? 'text-slate-500' : 'text-amber-300'}`}>
+                  {documentSelection.valid
+                    ? `Zaznaczone dokumenty: ${selectedDocumentIds.length}. Okres analizy: ${documentSelection.periodInfo.label}.`
+                    : documentSelection.message}
                 </p>
               </section>
               <DocumentList
@@ -2049,26 +2295,54 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
   const [selectedDocumentIds, setSelectedDocumentIds] = useState([]);
   const [analysisDialog, setAnalysisDialog] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [selectedAnalysisId, setSelectedAnalysisId] = useState('');
-  const [selectedPeriodKey, setSelectedPeriodKey] = useState('');
+  const [analysisSelection, dispatchAnalysisSelection] = useReducer(
+    reduceAnalysisViewSelection,
+    undefined,
+    createAnalysisViewSelection,
+  );
+  const {
+    selectedReportAnalysisId,
+    visibleQuarterMetricAnalysisIds,
+    previewAnalysisId,
+  } = analysisSelection;
 
   const helperOnline = helperStatus === 'online';
   const profile = detail.profile || fallbackProfile;
   const sources = detail.sources.length ? detail.sources : profile.sources || [];
-  const periodOptions = useMemo(() => buildAnalysisPeriodOptions(detail.analyses), [detail.analyses]);
-  const effectiveSelectedPeriodKey = periodOptions.some((period) => period.key === selectedPeriodKey)
-    ? selectedPeriodKey
-    : periodOptions[0]?.key || '';
-  const selectedAnalysis = detail.analyses.find((analysis) => getItemId(analysis) === selectedAnalysisId) || null;
-  const periodAnalysis = effectiveSelectedPeriodKey ? getLatestAnalysisForPeriod(detail.analyses, effectiveSelectedPeriodKey) : null;
-  const defaultAnalysis = periodAnalysis
-    || [...detail.analyses].sort(sortAnalysesByRecency)[0]
-    || profile.latestAnalysis
-    || null;
-  const activeAnalysis = selectedAnalysis || defaultAnalysis;
-  const activeAnalysisId = getItemId(activeAnalysis);
-  const activePeriodKey = getAnalysisReportPeriodInfo(activeAnalysis)?.key || effectiveSelectedPeriodKey;
+  const selectionModel = useMemo(() => buildAnalysisSelectionModel(detail.analyses), [detail.analyses]);
+  const effectiveSelectedReportAnalysisId = selectionModel.reportOptions.some(
+    (option) => option.analysisId === selectedReportAnalysisId,
+  ) ? selectedReportAnalysisId : selectionModel.defaultReportAnalysisId;
+  const availableQuarterAnalysisIdList = [
+    ...selectionModel.approvedQuarterOptions,
+    ...selectionModel.quarterDraftOptions,
+  ].map((option) => option.analysisId);
+  const availableQuarterAnalysisIds = new Set(availableQuarterAnalysisIdList);
+  const effectiveVisibleQuarterMetricAnalysisIds = visibleQuarterMetricAnalysisIds.filter(
+    (analysisId) => availableQuarterAnalysisIds.has(analysisId),
+  );
+  const visibleReportMetrics = useMemo(() => filterReportMetricsForSelection(
+    detail.reportMetrics,
+    selectionModel,
+    effectiveVisibleQuarterMetricAnalysisIds,
+  ), [detail.reportMetrics, effectiveVisibleQuarterMetricAnalysisIds, selectionModel]);
+  const previewAnalysis = detail.analyses.find((analysis) => getItemId(analysis) === previewAnalysisId) || null;
+  const selectedReportOption = selectionModel.reportOptions.find(
+    (option) => option.analysisId === effectiveSelectedReportAnalysisId,
+  );
+  const selectedReportAnalysis = selectedReportOption?.analysis || selectionModel.defaultReportAnalysis;
+  const activeAnalysis = previewAnalysis || selectedReportAnalysis || null;
+  const isolatedPreview = Boolean(previewAnalysis);
   const activeExtractionWarnings = getAnalysisItems(activeAnalysis, ['extractionWarnings']);
+  const selectedDocuments = detail.documents.filter((document) => selectedDocumentIds.includes(getItemId(document)));
+  const documentSelection = selectedDocuments.length === selectedDocumentIds.length
+    ? validateAnalysisDocumentSelection(selectedDocuments)
+    : {
+      valid: false,
+      code: 'DOCUMENT_NOT_FOUND',
+      message: 'Odśwież wybór dokumentów przed uruchomieniem analizy.',
+      periodInfo: null,
+    };
 
   const refreshDetail = useCallback(async () => {
     if (!helperOnline) return;
@@ -2168,30 +2442,40 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
     return analysisApi.importDocument(assetId, file, metadata);
   }, 'Dokument został zapisany lokalnie.', 'Importuję dokument do lokalnego archiwum...');
 
-  const deleteDocument = (documentId) => perform(
-    () => analysisApi.deleteDocument(documentId),
-    'Dokument usunięty z archiwum.',
-    'Usuwam dokument z lokalnego archiwum...',
-  );
+  const deleteDocument = async (documentId) => {
+    const result = await perform(
+      () => analysisApi.deleteDocument(documentId),
+      'Dokument usunięty z archiwum.',
+      'Usuwam dokument z lokalnego archiwum...',
+    );
+    if (result) setSelectedDocumentIds((current) => current.filter((id) => id !== documentId));
+    return result;
+  };
 
-  const runAnalysis = () => perform(
-    async () => {
+  const runAnalysis = () => {
+    if (!documentSelection.valid) {
+      setNotice({ type: 'error', text: documentSelection.message });
+      return Promise.resolve(null);
+    }
+    return perform(async () => {
       const result = await analysisApi.runAnalysis(assetId, { documentIds: selectedDocumentIds, model: 'sonar-pro' });
       const nextAnalysisId = getItemId(result);
-      const nextPeriodKey = getAnalysisReportPeriodInfo(result)?.key || '';
-      if (nextAnalysisId) setSelectedAnalysisId(nextAnalysisId);
-      if (nextPeriodKey) setSelectedPeriodKey(nextPeriodKey);
+      if (nextAnalysisId) {
+        dispatchAnalysisSelection({ type: 'open_preview', analysisId: nextAnalysisId });
+      }
       return result;
-    },
-    'Powstał szkic analizy. Sprawdź go przed zapisaniem.',
-    'Wysyłam zaznaczone dokumenty do analizy i czekam na szkic...',
-  );
+    }, 'Powstał szkic analizy. Sprawdź go przed zapisaniem.', 'Wysyłam zaznaczone dokumenty do analizy i czekam na szkic...');
+  };
 
-  const approveAnalysis = (analysisId) => perform(
-    () => analysisApi.approveAnalysis(analysisId),
-    'Analiza została zatwierdzona i dodana do historii.',
-    'Zatwierdzam szkic i zapisuję go w historii...',
-  );
+  const approveAnalysis = async (analysisId) => {
+    const result = await perform(
+      () => analysisApi.approveAnalysis(analysisId),
+      'Analiza została zatwierdzona i dodana do historii.',
+      'Zatwierdzam szkic i zapisuję go w historii...',
+    );
+    if (result) dispatchAnalysisSelection({ type: 'close_preview', analysisId });
+    return result;
+  };
 
   const renameAnalysis = (analysisId, title) => perform(
     () => analysisApi.updateAnalysisTitle(analysisId, title),
@@ -2199,11 +2483,15 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
     'Zapisuję nową nazwę analizy...',
   );
 
-  const deleteAnalysis = (analysisId) => perform(
-    () => analysisApi.deleteAnalysis(analysisId),
-    'Analiza została usunięta.',
-    'Usuwam analizę z lokalnej historii...',
-  );
+  const deleteAnalysis = async (analysisId) => {
+    const result = await perform(
+      () => analysisApi.deleteAnalysis(analysisId),
+      'Analiza została usunięta.',
+      'Usuwam analizę z lokalnej historii...',
+    );
+    if (result) dispatchAnalysisSelection({ type: 'remove_analysis', analysisId });
+    return result;
+  };
 
   const confirmAnalysisDialog = async ({ title } = {}) => {
     if (!analysisDialog?.analysis) return;
@@ -2215,17 +2503,24 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
   };
 
   const toggleDocument = (documentId) => {
-    setSelectedDocumentIds((current) => (
-      current.includes(documentId)
-        ? current.filter((id) => id !== documentId)
-        : [...current, documentId]
-    ));
+    if (selectedDocumentIds.includes(documentId)) {
+      setSelectedDocumentIds((current) => current.filter((id) => id !== documentId));
+      return;
+    }
+
+    const document = detail.documents.find((item) => getItemId(item) === documentId);
+    const nextSelection = validateAnalysisDocumentSelection([...selectedDocuments, document].filter(Boolean));
+    if (!nextSelection.valid) {
+      setNotice({ type: 'error', text: nextSelection.message });
+      return;
+    }
+    setSelectedDocumentIds((current) => [...current, documentId]);
   };
 
   const identifier = profile.isin || profile.canonicalId || (profile.ticker && profile.exchange ? `${profile.ticker}:${profile.exchange}` : profile.ticker);
 
   return (
-    <div className="mx-auto max-w-7xl p-8 animate-fadeIn">
+    <div className="mx-auto w-full min-w-0 max-w-7xl p-4 sm:p-6 lg:p-8 animate-fadeIn">
       <div className="mb-8">
         <Link to="/analysis" className="inline-flex items-center gap-2 text-xs font-semibold text-slate-400 transition-colors hover:text-blue-300">← Wszystkie aktywa</Link>
         <div className="mt-4">
@@ -2238,12 +2533,11 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-3xl font-bold text-white">{profile.name}</h1>
               <div className="flex shrink-0 items-center gap-2">
-                <ExtractionWarningsButton warnings={activeExtractionWarnings} />
                 <button
                   type="button"
                   onClick={() => setSettingsOpen(true)}
                   className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-700/70 bg-slate-900 text-slate-300 shadow-lg shadow-slate-950/30 transition-colors hover:border-blue-400/50 hover:bg-slate-800 hover:text-blue-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/35"
-                  aria-label="Otworz konfiguracje analizy"
+                  aria-label="Otwórz konfigurację analizy"
                   title="Konfiguracja analizy"
                 >
                   <SettingsIcon />
@@ -2267,6 +2561,7 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
         open={settingsOpen}
         profile={profile}
         selectedDocumentIds={selectedDocumentIds}
+        documentSelection={documentSelection}
         helperOnline={helperOnline}
         loading={loading}
         busy={busy}
@@ -2275,7 +2570,7 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
         candidates={detail.candidates}
         documents={detail.documents}
         analyses={detail.analyses}
-        activeAnalysisId={activeAnalysisId}
+        activeAnalysisId={getItemId(previewAnalysis)}
         onClose={() => setSettingsOpen(false)}
         onRefresh={refreshDetail}
         onRunAnalysis={runAnalysis}
@@ -2291,10 +2586,7 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
         onExport={onExport}
         onImport={onImport}
         onSelectAnalysis={(analysisId) => {
-          const selected = detail.analyses.find((analysis) => getItemId(analysis) === analysisId);
-          const selectedPeriod = getAnalysisReportPeriodInfo(selected)?.key || '';
-          setSelectedAnalysisId(analysisId);
-          if (selectedPeriod) setSelectedPeriodKey(selectedPeriod);
+          dispatchAnalysisSelection({ type: 'open_preview', analysisId });
           setSettingsOpen(false);
         }}
         onRenameAnalysis={(analysis) => setAnalysisDialog({ mode: 'rename', analysis })}
@@ -2316,14 +2608,24 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
       <div className="space-y-6">
         <AnalysisPreview
           analysis={activeAnalysis}
-          reportMetrics={detail.reportMetrics}
+          reportMetrics={visibleReportMetrics}
           positions={profile.positions || fallbackProfile.positions}
-          periodOptions={periodOptions}
-          selectedPeriodKey={activePeriodKey}
-          onPeriodChange={(periodKey) => {
-            setSelectedPeriodKey(periodKey);
-            setSelectedAnalysisId('');
+          selectionModel={selectionModel}
+          selectedReportAnalysisId={effectiveSelectedReportAnalysisId}
+          visibleQuarterMetricAnalysisIds={effectiveVisibleQuarterMetricAnalysisIds}
+          onReportChange={(analysisId) => {
+            dispatchAnalysisSelection({ type: 'select_report', analysisId });
           }}
+          onQuarterMetricToggle={(analysisId) => {
+            dispatchAnalysisSelection({
+              type: 'toggle_quarter_metrics',
+              analysisId,
+              availableAnalysisIds: availableQuarterAnalysisIdList,
+            });
+          }}
+          isolatedPreview={isolatedPreview}
+          onClosePreview={() => dispatchAnalysisSelection({ type: 'close_preview' })}
+          extractionWarnings={activeExtractionWarnings}
           helperOnline={helperOnline}
           busy={busy}
           onApprove={approveAnalysis}

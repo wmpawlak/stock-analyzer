@@ -13,10 +13,10 @@ const Sidebar = () => {
     error: '',
   }));
   const linkStyle = ({ isActive }) =>
-    `flex items-center gap-3 px-4 py-3 mt-1.5 text-sm font-medium rounded-xl transition-all duration-200 ${
+    `flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition-all duration-200 lg:mt-1.5 lg:gap-3 lg:rounded-xl lg:border-y-0 lg:border-r-0 lg:px-4 lg:py-3 lg:text-sm ${
       isActive
-        ? 'bg-blue-600/10 text-blue-400 border-l-4 border-blue-500 pl-3 font-semibold'
-        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border-l-4 border-transparent'
+        ? 'border-blue-500/40 bg-blue-600/10 font-semibold text-blue-400 lg:border-l-4 lg:border-blue-500 lg:pl-3'
+        : 'border-slate-800 text-slate-400 hover:bg-slate-800/40 hover:text-slate-200 lg:border-l-4 lg:border-transparent'
     }`;
 
   useEffect(() => {
@@ -32,9 +32,9 @@ const Sidebar = () => {
   }, []);
 
   return (
-    <div className="w-64 min-h-screen bg-slate-900 border-r border-slate-800/80 px-4 py-8 flex flex-col justify-between shrink-0">
+    <div className="flex w-full shrink-0 flex-col justify-between border-b border-slate-800/80 bg-slate-900 px-3 py-3 lg:min-h-screen lg:w-64 lg:border-b-0 lg:border-r lg:px-4 lg:py-8">
       <div>
-        <div className="px-4 mb-8">
+        <div className="mb-8 hidden px-4 lg:block">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-gradient-to-tr from-blue-600 to-indigo-500 rounded-xl shadow-lg shadow-blue-500/20">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -50,8 +50,8 @@ const Sidebar = () => {
           </div>
         </div>
 
-        <nav className="space-y-1">
-          <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Menu glowne</p>
+        <nav className="flex gap-1 overflow-x-auto pb-1 lg:block lg:space-y-1 lg:overflow-visible lg:pb-0">
+          <p className="mb-2 hidden px-4 text-[10px] font-bold uppercase tracking-wider text-slate-500 lg:block">Menu glowne</p>
           <NavLink to="/" className={linkStyle}>
             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 3.055A9.003 9.003 0 1020.945 13H11V3.055z" />
@@ -87,7 +87,7 @@ const Sidebar = () => {
         </nav>
       </div>
 
-      <div className="bg-slate-800/40 border border-slate-800 p-4 rounded-xl">
+      <div className="hidden rounded-xl border border-slate-800 bg-slate-800/40 p-4 lg:block">
         <div className="flex items-center gap-2">
           <div className={`w-2.5 h-2.5 rounded-full ${persistentStatus.online ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'}`}></div>
           <p className="text-xs font-semibold text-slate-300">
@@ -107,9 +107,9 @@ const Sidebar = () => {
 function App() {
   return (
     <Router>
-      <div className="flex min-h-screen font-sans bg-slate-950 text-slate-100 antialiased selection:bg-blue-600/30 selection:text-blue-200">
+      <div className="flex min-h-screen flex-col bg-slate-950 font-sans text-slate-100 antialiased selection:bg-blue-600/30 selection:text-blue-200 lg:flex-row">
         <Sidebar />
-        <main className="flex-1 bg-gradient-to-b from-slate-900 via-slate-950 to-slate-950 overflow-y-auto">
+        <main className="w-full min-w-0 flex-1 overflow-x-hidden overflow-y-auto bg-gradient-to-b from-slate-900 via-slate-950 to-slate-950 lg:w-auto">
           <Routes>
             <Route path="/" element={<Portfolio />} />
             <Route path="/investments" element={<Investments />} />

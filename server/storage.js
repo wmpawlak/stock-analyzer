@@ -37,7 +37,7 @@ import {
   metricUnitMatchesValueType,
   normalizeMetricText,
 } from './analysisMetricCatalog.js';
-import { normalizeReportPeriod } from '../shared/reportPeriods.js';
+import { normalizeReportMetricPeriod, normalizeReportPeriod } from '../shared/reportPeriods.js';
 import { createStoredZip, extractZipSafely, inspectZip } from './zip.js';
 
 const DATA_VERSION = 1;
@@ -415,7 +415,7 @@ const approvedMetricRowsFromAnalysis = (analysis, timestamp) => {
     const spec = findReportMetricSpec(fact.metricKey) || findReportMetricSpec(fact.label);
     const metricKey = stringOrEmpty(fact.metricKey) || spec?.metricKey || '';
     if (metricKey === 'dividend_net_profit_ratio' || spec?.metricKey === 'dividend_net_profit_ratio') return [];
-    const factPeriod = normalizeReportPeriod(fact.period);
+    const factPeriod = normalizeReportMetricPeriod(fact.period, reportPeriod);
     if (reportPeriod && factPeriod && factPeriod !== reportPeriod) return [];
     const period = reportPeriod || factPeriod;
     if (!metricKey || !period || !hasOwn(fact, 'value')) return [];
@@ -978,7 +978,7 @@ export class AnalysisStore {
       sourceId,
       title: stringOrEmpty(title) || cleanFilename,
       type: stringOrEmpty(type) || 'report',
-      period: stringOrEmpty(period),
+      period: normalizeReportPeriod(period),
       publishedAt: stringOrEmpty(publishedAt) || null,
       sourceUrl: sourceUrl ? safeUrl(sourceUrl) : '',
       filename: cleanFilename,
@@ -1033,7 +1033,7 @@ export class AnalysisStore {
         parentDocumentId: parent.id,
         title: `${parent.title}: ${file.path}`,
         type: parent.type || 'report',
-        period: parent.reporting_period || '',
+        period: parent.period || parent.reporting_period || '',
         publishedAt: parent.published_at || null,
         sourceUrl: parent.source_url || '',
         filename,

@@ -23,6 +23,10 @@ import {
   analyzeDocumentsWithPerplexity,
   discoverCandidatesWithPerplexity,
 } from './perplexity.js';
+import {
+  validateAnalysisDocumentSelection,
+  validateReportDocumentMetadata,
+} from '../shared/reportDocuments.js';
 
 const API_PREFIX = '/api/analysis';
 const DEFAULT_HOST = '127.0.0.1';
@@ -232,12 +236,14 @@ const handleRoute = async ({ request, response, store, apiKey, fetchImpl }) => {
         const title = decodeHeaderValue(request.headers['x-document-title'] || filename);
         const type = decodeHeaderValue(request.headers['x-document-type'] || 'report');
         const period = decodeHeaderValue(request.headers['x-reporting-period'] || '');
+        const metadata = validateReportDocumentMetadata({ type, period });
+        if (!metadata.valid) throw new AppError(metadata.code, metadata.message, 400);
         const saved = await store.saveDocument(assetId, {
           buffer,
           filename,
           title,
-          type,
-          period,
+          type: metadata.type,
+          period: metadata.period,
           mimeType: String(request.headers['content-type'] || '').split(';')[0],
         });
         sendData(response, saved, 201);
@@ -305,13 +311,15 @@ const handleRoute = async ({ request, response, store, apiKey, fetchImpl }) => {
       }
       if (parts.length === 3 && method === 'POST') {
         const body = await readJsonBody(request);
-        store.assertBudget(ANALYSIS_BUDGET_RESERVE_USD);
-        const profile = requireProfile(store, assetId);
         const documentIds = Array.isArray(body.documentIds) ? body.documentIds : [];
         const documents = documentIds.map((documentId) => store.getDocumentRow(documentId));
         if (!documents.length || documents.some((document) => document.asset_id !== assetId || !document.analyzable)) {
           throw new AppError('NO_ANALYZABLE_DOCUMENTS', 'Wybierz co najmniej jeden zarchiwizowany dokument w obsługiwanym formacie.', 400);
         }
+        const selection = validateAnalysisDocumentSelection(documents);
+        if (!selection.valid) throw new AppError(selection.code, selection.message, 400);
+        store.assertBudget(ANALYSIS_BUDGET_RESERVE_USD);
+        const profile = requireProfile(store, assetId);
         const totalInputBytes = documents.reduce((total, document) => total + Number(document.size_bytes || 0), 0);
         if (totalInputBytes > MAX_ANALYSIS_INPUT_BYTES) {
           throw new AppError('ANALYSIS_INPUT_TOO_LARGE', 'Łączny rozmiar dokumentów do analizy przekracza 100 MB.', 413);

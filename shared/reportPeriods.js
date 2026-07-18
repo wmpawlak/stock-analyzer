@@ -67,6 +67,31 @@ const isCumulativeHalfOrNineMonths = (text) => (
   || /\b(?:polrocz|half[ -]?year|six months|6\s*mies|nine months|9\s*mies)/.test(text)
 );
 
+const annualPeriodFromText = (original, text, dates) => {
+  const exactYear = text.match(/^((?:19|20)\d{2})$/);
+  if (exactYear) return Number(exactYear[1]);
+
+  const fiscalYear = text.match(/\bfy\s*[:/-]?\s*((?:19|20)\d{2})\b/);
+  if (fiscalYear) return Number(fiscalYear[1]);
+
+  const annualLabel = /\b(?:raport\s+roczn|roczn(?:y|e|a)|annual\s+report|full\s+year)\b/.test(text);
+  const labelledYear = annualLabel ? text.match(/\b((?:19|20)\d{2})\b/) : null;
+  if (labelledYear) return Number(labelledYear[1]);
+
+  if (dates.length >= 2 && isRangeSeparator(original.slice(dates[0].endIndex, dates[1].index))) {
+    const [start, end] = dates;
+    if (
+      start.year === end.year
+      && start.month === 1
+      && start.day === 1
+      && end.month === 12
+      && end.day === 31
+    ) return end.year;
+  }
+
+  return null;
+};
+
 export const inferReportPeriodFromText = (value) => {
   const original = String(value ?? '').trim();
   if (!original) return '';
@@ -76,6 +101,9 @@ export const inferReportPeriodFromText = (value) => {
   if (explicit) return `Q${explicit.quarter} ${explicit.year}`;
 
   const dates = extractDates(original);
+  const annualYear = annualPeriodFromText(original, text, dates);
+  if (annualYear) return String(annualYear);
+
   const range = quarterFromFullRange(original, dates);
   if (range?.quarter) return `Q${range.quarter} ${range.year}`;
   if (range?.rejectedRange || isCumulativeHalfOrNineMonths(text)) return '';
@@ -91,18 +119,44 @@ export const normalizeReportPeriod = (value, { preserveUnknown = true } = {}) =>
   return inferReportPeriodFromText(original) || (preserveUnknown ? original : '');
 };
 
+export const normalizeReportMetricPeriod = (value, reportPeriod) => {
+  const original = String(value ?? '').trim();
+  const normalized = normalizeReportPeriod(original);
+  const normalizedReportPeriod = normalizeReportPeriod(reportPeriod);
+  if (!original || !normalizedReportPeriod) return normalized;
+
+  const reportInfo = getReportPeriodInfo(normalizedReportPeriod);
+  if (!reportInfo.isAnnual) return normalized;
+  if (normalized === normalizedReportPeriod) return normalized;
+
+  const dates = extractDates(original);
+  if (dates.length === 1) {
+    const [date] = dates;
+    if (date.year === reportInfo.year && date.month === 12 && date.day === 31) {
+      return normalizedReportPeriod;
+    }
+  }
+
+  return normalized;
+};
+
 export const getReportPeriodInfo = (value, { fallback = 'Okres niepodany' } = {}) => {
   const original = String(value ?? '').trim() || fallback;
   const normalized = normalizeReportPeriod(original);
   const quarterMatch = normalized.match(/^Q([1-4])\s+((?:19|20)\d{2})$/);
-  const year = Number(quarterMatch?.[2] || (normalized.match(/(?:19|20)\d{2}/) || [])[0]) || null;
+  const annualMatch = normalized.match(/^((?:19|20)\d{2})$/);
+  const year = Number(quarterMatch?.[2] || annualMatch?.[1] || (normalized.match(/(?:19|20)\d{2}/) || [])[0]) || null;
   const quarter = Number(quarterMatch?.[1]) || null;
+  const isQuarter = Boolean(year && quarter);
+  const isAnnual = Boolean(year && annualMatch);
 
   return {
-    key: quarter ? `Q:${year}:${quarter}` : normalized,
+    key: isQuarter ? `Q:${year}:${quarter}` : isAnnual ? `FY:${year}` : normalized,
     label: normalized,
     year,
     quarter,
-    isQuarter: Boolean(year && quarter),
+    kind: isQuarter ? 'quarter' : isAnnual ? 'annual' : 'other',
+    isQuarter,
+    isAnnual,
   };
 };

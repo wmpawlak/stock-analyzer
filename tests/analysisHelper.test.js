@@ -64,6 +64,7 @@ test('analysis store archives an original ZIP, registers extracted files and res
       assert.equal(documents.length, 2);
       const extracted = documents.find((document) => document.parentDocumentId === saved.document.id);
       assert.equal(extracted.analyzable, true);
+      assert.equal(extracted.period, 'Q1 2026');
 
       const draft = store.createDraftAnalysis('company:WSE:CDR', {
         documentIds: [extracted.id],
@@ -262,6 +263,105 @@ test('approved analysis materializes latest report metric facts once per asset, 
       assert.equal(restoredNetIncome.value, 100);
       assert.equal(restoredNetIncome.page, 12);
       assert.equal(restoredNetIncome.analysisId, draft.id);
+    } finally {
+      store.close();
+    }
+  });
+});
+
+test('approved annual metrics come from annual analyses and are never synthesized from Q1-Q4', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    let timestamp = Date.UTC(2026, 0, 1);
+    const store = await createAnalysisStore({
+      dataDir: directory,
+      clock: () => new Date(timestamp += 1000),
+    });
+    try {
+      const assetId = 'company:WSE:CDR';
+      const annualDocument = await store.saveDocument(assetId, {
+        buffer: Buffer.from('Annual report 2025'),
+        filename: 'annual-2025.txt',
+        title: 'Raport roczny 2025',
+        type: 'annual_report',
+        period: 'FY 2025',
+      });
+      assert.equal(annualDocument.document.period, '2025');
+
+      const firstAnnual = store.createDraftAnalysis(assetId, {
+        documentIds: [annualDocument.document.id],
+        content: {
+          title: 'Analiza roczna 2025',
+          schemaVersion: '2.0',
+          reportPeriod: '2025',
+          summary: 'Rok 2025.',
+          metricFacts: [
+            {
+              metricKey: 'net_income', label: 'Zysk netto', value: 100, unit: 'mln PLN', period: '2025',
+              page: 10, section: 'Rachunek wynikow', quote: 'Zysk netto 100 mln PLN', confidence: 0.9,
+            },
+            {
+              metricKey: 'total_assets', label: 'Aktywa ogolem', value: 2000, unit: 'mln PLN', period: '31.12.2025',
+              page: 20, section: 'Bilans', quote: 'Aktywa razem 2 000 mln PLN', confidence: 0.92,
+            },
+            {
+              metricKey: 'net_income', label: 'Zysk netto', value: 80, unit: 'mln PLN', period: '2024',
+              page: 10, section: 'Rachunek wynikow', quote: 'Zysk netto 80 mln PLN', confidence: 0.85,
+            },
+          ],
+          risks: [], conclusions: [], extractionWarnings: [],
+        },
+      });
+      store.approveAnalysis(firstAnnual.id);
+
+      const updatedAnnual = store.createDraftAnalysis(assetId, {
+        documentIds: [annualDocument.document.id],
+        content: {
+          title: 'Analiza roczna 2025 po korekcie',
+          schemaVersion: '2.0',
+          reportPeriod: '2025',
+          summary: 'Rok 2025 po korekcie.',
+          metricFacts: [{
+            metricKey: 'net_income', label: 'Zysk netto', value: 120, unit: 'mln PLN', period: '2025',
+            page: 11, section: 'Rachunek wynikow', quote: 'Zysk netto 120 mln PLN', confidence: 0.95,
+          }],
+          risks: [], conclusions: [], extractionWarnings: [],
+        },
+      });
+      store.approveAnalysis(updatedAnnual.id);
+
+      for (let quarter = 1; quarter <= 4; quarter += 1) {
+        const document = await store.saveDocument(assetId, {
+          buffer: Buffer.from(`Quarter ${quarter} report`),
+          filename: `q${quarter}-2026.txt`,
+          title: `Raport Q${quarter} 2026`,
+          type: 'quarterly_report',
+          period: `Q${quarter} 2026`,
+        });
+        const analysis = store.createDraftAnalysis(assetId, {
+          documentIds: [document.document.id],
+          content: {
+            title: `Analiza Q${quarter} 2026`, schemaVersion: '2.0', reportPeriod: `Q${quarter} 2026`, summary: 'Kwartał.',
+            metricFacts: [{
+              metricKey: 'net_income', label: 'Zysk netto', value: quarter * 10, unit: 'mln PLN', period: `Q${quarter} 2026`,
+              page: 1, section: 'Rachunek wynikow', quote: `Zysk netto ${quarter * 10} mln PLN`, confidence: 0.9,
+            }],
+            risks: [], conclusions: [], extractionWarnings: [],
+          },
+        });
+        store.approveAnalysis(analysis.id);
+      }
+
+      const metrics = store.listApprovedReportMetrics(assetId);
+      const annualMetrics = metrics.filter((metric) => metric.period === '2025');
+      assert.equal(annualMetrics.length, 2);
+      assert.equal(annualMetrics.find((metric) => metric.metricKey === 'net_income').value, 120);
+      assert.equal(annualMetrics.find((metric) => metric.metricKey === 'net_income').analysisId, updatedAnnual.id);
+      assert.equal(annualMetrics.find((metric) => metric.metricKey === 'total_assets').value, 2000);
+      assert.equal(metrics.some((metric) => metric.period === '2026'), false);
+      assert.deepEqual(
+        metrics.filter((metric) => metric.metricKey === 'net_income' && metric.period.includes('2026')).map((metric) => metric.period).sort(),
+        ['Q1 2026', 'Q2 2026', 'Q3 2026', 'Q4 2026'],
+      );
     } finally {
       store.close();
     }
@@ -675,7 +775,7 @@ test('helper exposes local profiles and accepts a manual upload without a Perple
           'Content-Type': 'text/plain',
           'X-File-Name': encodeURIComponent('manual.txt'),
           'X-Document-Title': encodeURIComponent('Raport ręczny'),
-          'X-Document-Type': encodeURIComponent('raport kwartalny'),
+          'X-Document-Type': encodeURIComponent('quarterly_report'),
           'X-Reporting-Period': encodeURIComponent('Q1 2026'),
         },
         body: 'treść ręcznego raportu',
@@ -683,6 +783,8 @@ test('helper exposes local profiles and accepts a manual upload without a Perple
       const uploadPayload = await uploadResponse.json();
       assert.equal(uploadResponse.status, 201);
       assert.equal(uploadPayload.data.document.filename, 'manual.txt');
+      assert.equal(uploadPayload.data.document.type, 'quarterly_report');
+      assert.equal(uploadPayload.data.document.period, 'Q1 2026');
 
       const draft = helper.store.createDraftAnalysis('company:WSE:CDR', {
         documentIds: [uploadPayload.data.document.id],
@@ -745,6 +847,61 @@ test('helper exposes local profiles and accepts a manual upload without a Perple
       const discoveryPayload = await discoveryResponse.json();
       assert.equal(discoveryResponse.status, 412);
       assert.equal(discoveryPayload.error.code, 'PERPLEXITY_NOT_CONFIGURED');
+    } finally {
+      await new Promise((resolve) => helper.server.close(resolve));
+      helper.store.close();
+    }
+  });
+});
+
+test('helper validates manual report metadata and rejects mixed analysis periods', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const helper = await startAnalysisHelper({ port: 0, dataDir: directory, apiKey: '' });
+    try {
+      const port = helper.server.address().port;
+      const base = `http://127.0.0.1:${port}/api/analysis`;
+      const assetPath = `${base}/profiles/${encodeURIComponent('company:WSE:CDR')}`;
+      const upload = (filename, type, period, content) => fetch(`${assetPath}/documents/import`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain',
+          'X-File-Name': encodeURIComponent(filename),
+          'X-Document-Title': encodeURIComponent(filename),
+          'X-Document-Type': encodeURIComponent(type),
+          'X-Reporting-Period': encodeURIComponent(period),
+        },
+        body: content,
+      });
+
+      const invalidAnnualResponse = await upload('annual-invalid.txt', 'annual_report', 'Q4 2025', 'invalid annual');
+      const invalidAnnualPayload = await invalidAnnualResponse.json();
+      assert.equal(invalidAnnualResponse.status, 400);
+      assert.equal(invalidAnnualPayload.error.code, 'ANNUAL_PERIOD_REQUIRED');
+
+      const q1Response = await upload('q1.txt', 'quarterly_report', 'Q1 2025', 'q1 content');
+      const q2Response = await upload('q2.txt', 'quarterly_report', 'Q2 2025', 'q2 content');
+      const otherResponse = await upload('attachment.txt', 'other', '', 'attachment content');
+      const q1 = (await q1Response.json()).data.document;
+      const q2 = (await q2Response.json()).data.document;
+      const other = (await otherResponse.json()).data.document;
+
+      const mixedResponse = await fetch(`${assetPath}/analyses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ documentIds: [q1.id, q2.id], model: 'sonar-pro' }),
+      });
+      const mixedPayload = await mixedResponse.json();
+      assert.equal(mixedResponse.status, 400);
+      assert.equal(mixedPayload.error.code, 'MIXED_REPORT_PERIODS');
+
+      const missingPeriodResponse = await fetch(`${assetPath}/analyses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ documentIds: [other.id], model: 'sonar-pro' }),
+      });
+      const missingPeriodPayload = await missingPeriodResponse.json();
+      assert.equal(missingPeriodResponse.status, 400);
+      assert.equal(missingPeriodPayload.error.code, 'DOCUMENT_PERIOD_REQUIRED');
     } finally {
       await new Promise((resolve) => helper.server.close(resolve));
       helper.store.close();
@@ -918,6 +1075,98 @@ test('Perplexity adapter sends structured discovery and file-analysis requests w
   assert.match(requests[1].body.messages[1].content[1].text, /tekst wyodrebniony lokalnie z PDF/);
   assert.match(requests[1].body.messages[1].content[1].text, /Zysk netto 100 mln PLN/);
   assert.equal(JSON.stringify(requests[1].body.messages[1].content).includes('file_url'), false);
+});
+
+test('Perplexity adapter treats an annual report as a full year and keeps comparison columns out of metric facts', async () => {
+  const requests = [];
+  const fetchImpl = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    const content = JSON.stringify({
+      schemaVersion: '2.0',
+      title: 'Analiza roczna 2025',
+      reportPeriod: 'Q4 2025',
+      summary: 'Pełny rok 2025 zakończył się zyskiem.',
+      structuredSummary: {
+        headline: 'Rok 2025 zakończył się zyskiem i wzrostem aktywów.',
+        stance: 'pozytywny',
+        sections: [{
+          title: 'Najważniejsze fakty',
+          bullets: [{ text: 'Zysk netto wyniósł 100 mln PLN.', metricKeys: ['net_income'] }],
+        }],
+      },
+      metricFacts: [
+        {
+          metricKey: 'net_income', label: 'Zysk netto', value: 100, unit: 'mln PLN', period: '2025',
+          page: 10, section: 'Rachunek wyników', quote: 'Zysk netto 100 mln PLN', confidence: 0.95,
+        },
+        {
+          metricKey: 'total_assets', label: 'Aktywa ogółem', value: 2000, unit: 'mln PLN', period: '31.12.2025',
+          page: 20, section: 'Bilans', quote: 'Aktywa razem 2 000 mln PLN', confidence: 0.92,
+        },
+        {
+          metricKey: 'net_income', label: 'Zysk netto', value: 80, unit: 'mln PLN', period: '2024',
+          page: 10, section: 'Rachunek wyników', quote: 'Zysk netto 80 mln PLN', confidence: 0.9,
+        },
+        {
+          metricKey: 'total_liabilities', label: 'Zobowiązania ogółem', value: 1500, unit: 'mln PLN', period: 'Q4 2025',
+          page: 20, section: 'Bilans', quote: 'Zobowiązania 1 500 mln PLN', confidence: 0.9,
+        },
+      ],
+      risks: [{
+        text: 'Ryzyko testowe.',
+        source: { documentId: 'annual_doc', page: 30, section: 'Ryzyka', evidence: 'Opis ryzyka.' },
+      }],
+      conclusions: [{
+        text: 'Wniosek testowy.',
+        source: { documentId: 'annual_doc', page: 10, section: 'Rachunek wyników', evidence: 'Zysk netto 100 mln PLN.' },
+      }],
+      extractionWarnings: [],
+    });
+    return new Response(JSON.stringify({
+      choices: [{ message: { content } }],
+      citations: [],
+      usage: { cost: { total_cost: 0.1 } },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+
+  const analysis = await analyzeDocumentsWithPerplexity({
+    apiKey: 'test-key',
+    profile: { assetId: 'company:WSE:CDR', type: 'company', name: 'CD Projekt', canonicalId: 'CDR:WSE' },
+    documents: [{
+      id: 'annual_doc',
+      filename: 'annual-2025.txt',
+      title: 'Raport roczny 2025',
+      type: 'annual_report',
+      period: 'FY 2025',
+      mimeType: 'text/plain',
+    }, {
+      id: 'annual_notes',
+      filename: 'annual-notes-2025.txt',
+      title: 'Noty do raportu rocznego 2025',
+      type: 'annual_report',
+      period: '2025',
+      mimeType: 'text/plain',
+    }],
+    documentBuffers: [
+      Buffer.from('Rok 2025. Zysk netto 100 mln PLN. Aktywa na 31.12.2025: 2 000 mln PLN.'),
+      Buffer.from('Noty do raportu rocznego 2025.'),
+    ],
+    fetchImpl,
+  });
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].model, 'sonar-pro');
+  assert.equal(analysis.content.reportPeriod, '2025');
+  assert.deepEqual(analysis.content.metricFacts.map((fact) => fact.metricKey), ['net_income', 'total_assets']);
+  assert.equal(analysis.content.metricFacts.every((fact) => fact.period === '2025'), true);
+  const prompt = requests[0].messages[1].content[0].text;
+  assert.match(prompt, /To jest analiza pełnego roku 2025, a nie analiza Q4 2025/);
+  assert.match(prompt, /aggregation sum/);
+  assert.match(prompt, /aggregation point_in_time/);
+  assert.match(prompt, /data 31\.12\.2025 oznacza koniec roku, nie Q4/);
+  assert.match(prompt, /Kolumny za 2024 i inne okresy porównawcze/);
+  assert.match(prompt, /Nie sumuj kwartałów i nie twórz syntetycznej wartości rocznej z Q1-Q4/);
+  assert.doesNotMatch(prompt, /Reguły okresu dla raportu kwartalnego/);
 });
 
 test('analysis normalization rejects merged columns and monetary values mislabeled as CoR', async () => {
