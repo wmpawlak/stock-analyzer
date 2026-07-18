@@ -31,8 +31,6 @@ import {
 const API_PREFIX = '/api/analysis';
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 4310;
-const DISCOVERY_BUDGET_RESERVE_USD = 0.25;
-const ANALYSIS_BUDGET_RESERVE_USD = 1.25;
 const MAX_ANALYSIS_INPUT_BYTES = 100 * 1024 * 1024;
 const MAX_BROWSER_STATE_BYTES = 10 * 1024 * 1024;
 
@@ -258,7 +256,6 @@ const handleRoute = async ({ request, response, store, apiKey, fetchImpl }) => {
       }
       if (parts.length === 4 && parts[3] === 'discover' && method === 'POST') {
         await readJsonBody(request); // Explicit user action; options are intentionally advisory for now.
-        store.assertBudget(DISCOVERY_BUDGET_RESERVE_USD);
         const profile = requireProfile(store, assetId);
         const result = await discoverCandidatesWithPerplexity({
           apiKey,
@@ -318,7 +315,6 @@ const handleRoute = async ({ request, response, store, apiKey, fetchImpl }) => {
         }
         const selection = validateAnalysisDocumentSelection(documents);
         if (!selection.valid) throw new AppError(selection.code, selection.message, 400);
-        store.assertBudget(ANALYSIS_BUDGET_RESERVE_USD);
         const profile = requireProfile(store, assetId);
         const totalInputBytes = documents.reduce((total, document) => total + Number(document.size_bytes || 0), 0);
         if (totalInputBytes > MAX_ANALYSIS_INPUT_BYTES) {
@@ -331,22 +327,41 @@ const handleRoute = async ({ request, response, store, apiKey, fetchImpl }) => {
             throw new AppError('DOCUMENT_FILE_MISSING', `Brakuje pliku „${document.filename}”.`, 404);
           }
         }));
-        const result = await analyzeDocumentsWithPerplexity({
-          apiKey,
-          profile,
-          documents: documents.map((document) => ({
-            id: document.id,
-            filename: document.filename,
-            title: document.title,
-            type: document.type,
-            period: document.reporting_period,
-            publishedAt: document.published_at,
-            sourceUrl: document.source_url,
-            mimeType: document.mime_type,
-          })),
-          documentBuffers: buffers,
-          fetchImpl,
-        });
+        let result;
+        try {
+          result = await analyzeDocumentsWithPerplexity({
+            apiKey,
+            profile,
+            documents: documents.map((document) => ({
+              id: document.id,
+              filename: document.filename,
+              title: document.title,
+              type: document.type,
+              period: document.reporting_period,
+              publishedAt: document.published_at,
+              sourceUrl: document.source_url,
+              mimeType: document.mime_type,
+            })),
+            documentBuffers: buffers,
+            fetchImpl,
+          });
+        } catch (error) {
+          const confirmedCostUsd = Number(error?.confirmedCostUsd);
+          if (Number.isFinite(confirmedCostUsd) && confirmedCostUsd > 0) {
+            store.recordUsage({
+              action: 'analysis',
+              costUsd: confirmedCostUsd,
+              metadata: {
+                model: 'sonar-pro (extraction + synthesis)',
+                documentIds,
+                status: 'failed',
+                errorCode: stringOrEmpty(error?.code) || 'INTERNAL_ERROR',
+              },
+            });
+          }
+          throw error;
+        }
+        const budget = store.recordUsage({ action: 'analysis', costUsd: result.costUsd, metadata: { model: result.model, documentIds } });
         const analysis = store.createDraftAnalysis(assetId, {
           documentIds,
           content: result.content,
@@ -354,7 +369,6 @@ const handleRoute = async ({ request, response, store, apiKey, fetchImpl }) => {
           provider: 'perplexity',
           costUsd: result.costUsd,
         });
-        const budget = store.recordUsage({ action: 'analysis', costUsd: result.costUsd, metadata: { model: result.model, documentIds } });
         sendData(response, { analysis, budget }, 201);
         return;
       }
@@ -437,13 +451,14 @@ export const startAnalysisHelper = async ({
   port = getPort(process.env.ANALYSIS_HELPER_PORT),
   dataDir = process.env.ANALYSIS_DATA_DIR || path.resolve(process.cwd(), 'data'),
   apiKey,
+  fetchImpl,
 } = {}) => {
   if (host !== DEFAULT_HOST) {
     throw new AppError('INVALID_HOST', 'Helper analizy może działać wyłącznie na 127.0.0.1.', 400);
   }
   const store = await createAnalysisStore({ dataDir });
   const resolvedKey = apiKey === undefined ? await readPerplexityApiKey() : apiKey;
-  const server = createAnalysisServer({ store, apiKey: resolvedKey });
+  const server = createAnalysisServer({ store, apiKey: resolvedKey, fetchImpl });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, host, () => {

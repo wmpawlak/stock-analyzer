@@ -29,10 +29,6 @@ import {
   filterReportMetricsForSelection,
   reduceAnalysisViewSelection,
 } from '../utils/analysisSelection.js';
-import {
-  PERSISTENT_STATE_KEYS,
-  hydratePersistentState,
-} from '../utils/persistentStorage.js';
 import { getReportPeriodInfo } from '../../shared/reportPeriods.js';
 import {
   REPORT_DOCUMENT_TYPES,
@@ -62,16 +58,6 @@ const formatCurrency = (value) => (
     ? new Intl.NumberFormat('pl-PL', {
       style: 'currency',
       currency: 'PLN',
-      maximumFractionDigits: 2,
-    }).format(Number(value))
-    : EMPTY_VALUE
-);
-
-const formatUsd = (value) => (
-  Number.isFinite(Number(value))
-    ? new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
       maximumFractionDigits: 2,
     }).format(Number(value))
     : EMPTY_VALUE
@@ -195,113 +181,6 @@ const HelperBanner = ({ status, error, onRetry }) => {
   );
 };
 
-const getBrowserState = () => {
-  const localStorageSnapshot = {};
-  PERSISTENT_STATE_KEYS.forEach((key) => {
-    const value = window.localStorage.getItem(key);
-    if (value !== null) localStorageSnapshot[key] = value;
-  });
-
-  return {
-    exportedAt: new Date().toISOString(),
-    localStorage: localStorageSnapshot,
-  };
-};
-
-const downloadBackupPayload = (payload) => {
-  const downloadUrl = payload?.downloadUrl || payload?.url;
-  if (downloadUrl) {
-    window.open(downloadUrl, '_blank', 'noopener,noreferrer');
-    return;
-  }
-
-  const blob = new Blob([JSON.stringify(payload ?? {}, null, 2)], { type: 'application/json' });
-  const objectUrl = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = objectUrl;
-  anchor.download = `analysis_backup_${new Date().toISOString().slice(0, 10)}.json`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(objectUrl);
-};
-
-const BudgetPanel = ({ budget, helperOnline, onUpdate, onExport, onImport, busy, compact = false }) => {
-  const importInputRef = useRef(null);
-  const [limit, setLimit] = useState(() => String(budget?.monthlyLimitUsd ?? budget?.limitUsd ?? 10));
-
-  const spent = budget?.spentUsd ?? budget?.usedUsd ?? budget?.monthSpentUsd ?? 0;
-  const configuredLimit = budget?.monthlyLimitUsd ?? budget?.limitUsd ?? 10;
-  const remaining = budget?.remainingUsd ?? Math.max(0, Number(configuredLimit) - Number(spent || 0));
-
-  return (
-    <section className={`rounded-2xl border border-slate-800/80 bg-slate-900 shadow-xl ${compact ? 'p-4' : 'p-5'}`}>
-      <SectionHeading
-        title="Lokalny budżet i backup"
-        description={compact ? 'Lokalny limit i kopia danych analizy.' : 'Limit jest kontrolą po stronie aplikacji. Rozliczenia dostawcy API pozostają źródłem ostatecznym.'}
-      />
-      <div className={`grid gap-4 ${compact ? '' : 'lg:grid-cols-[1.2fr_1fr]'}`}>
-        <div className={`grid gap-3 ${compact ? 'grid-cols-1' : 'grid-cols-3'}`}>
-          <div className="rounded-xl border border-slate-800/70 bg-slate-950/60 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Wykorzystano</p>
-            <p className="mt-1 font-mono text-sm font-semibold text-slate-200">{formatUsd(spent)}</p>
-          </div>
-          <div className="rounded-xl border border-slate-800/70 bg-slate-950/60 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Pozostało</p>
-            <p className="mt-1 font-mono text-sm font-semibold text-emerald-300">{formatUsd(remaining)}</p>
-          </div>
-          <label className="rounded-xl border border-slate-800/70 bg-slate-950/60 p-3">
-            <span className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Limit / miesiąc</span>
-            <div className="mt-1 flex items-center gap-1">
-              <span className="font-mono text-sm text-slate-500">$</span>
-              <input
-                type="number"
-                min="0"
-                step="1"
-                value={limit}
-                onChange={(event) => setLimit(event.target.value)}
-                disabled={!helperOnline || busy}
-                className="w-full bg-transparent font-mono text-sm font-semibold text-slate-100 outline-none"
-                aria-label="Miesięczny limit budżetu w USD"
-              />
-            </div>
-          </label>
-        </div>
-        <div className={`${compact ? 'grid gap-2' : 'flex flex-wrap items-end justify-start gap-2 lg:justify-end'}`}>
-          <SecondaryButton
-            disabled={!helperOnline || busy}
-            onClick={() => onUpdate(Number(limit))}
-            className={compact ? 'w-full' : ''}
-          >
-            Zapisz limit
-          </SecondaryButton>
-          <SecondaryButton disabled={!helperOnline || busy} onClick={onExport} className={compact ? 'w-full' : ''}>
-            Eksportuj pełny backup
-          </SecondaryButton>
-          <input
-            ref={importInputRef}
-            type="file"
-            accept=".zip,application/zip"
-            className="hidden"
-            onChange={(event) => {
-              const [file] = event.target.files || [];
-              if (file) onImport(file);
-              event.target.value = '';
-            }}
-          />
-          <SecondaryButton
-            disabled={!helperOnline || busy}
-            onClick={() => importInputRef.current?.click()}
-            className={compact ? 'w-full' : ''}
-          >
-            Importuj backup
-          </SecondaryButton>
-        </div>
-      </div>
-    </section>
-  );
-};
-
 const AnalysisProfilesTable = ({ profiles, onOpen }) => (
   <div className="overflow-hidden rounded-2xl border border-slate-800/80 bg-slate-900 shadow-xl">
     <div className="overflow-x-auto">
@@ -312,7 +191,6 @@ const AnalysisProfilesTable = ({ profiles, onOpen }) => (
             <th className="px-4 py-3">Typ</th>
             <th className="px-4 py-3">Portfele</th>
             <th className="px-4 py-3 text-right">Pozycje</th>
-            <th className="px-4 py-3 text-right">Źródła</th>
             <th className="px-4 py-3">Ostatnia analiza</th>
           </tr>
         </thead>
@@ -352,7 +230,6 @@ const AnalysisProfilesTable = ({ profiles, onOpen }) => (
                   {profile.portfolios?.length ? profile.portfolios.join(', ') : 'Lista obserwowanych'}
                 </td>
                 <td className="px-4 py-3 text-right font-mono text-slate-300">{profile.positions?.length || 0}</td>
-                <td className="px-4 py-3 text-right font-mono text-slate-300">{profile.sources?.length || 0}</td>
                 <td className="px-4 py-3 text-slate-300">
                   {latest ? (
                     <div className="flex flex-wrap items-center gap-2">
@@ -430,7 +307,7 @@ const WatchlistForm = ({ helperOnline, onCreate, busy }) => {
   );
 };
 
-const AnalysisList = ({ profiles, helperStatus, helperError, budget, onRefresh, onCreate, onBudgetUpdate, onExport, onImport, busy }) => {
+const AnalysisList = ({ profiles, helperStatus, helperError, onRefresh, onCreate, busy }) => {
   const navigate = useNavigate();
 
   return (
@@ -440,7 +317,7 @@ const AnalysisList = ({ profiles, helperStatus, helperError, budget, onRefresh, 
         <p className="mb-2 text-xs font-bold uppercase tracking-[0.2em] text-blue-400">Biblioteka badań</p>
         <h1 className="text-3xl font-bold text-white">Analiza aktywów</h1>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">
-          Raporty, wnioski i metryki są wspólne dla pozycji z Maklera oraz IKZE, a ich koszt i historia pozostają lokalne.
+          Raporty, wnioski i metryki są wspólne dla pozycji z Maklera oraz IKZE, a historia pozostaje lokalna.
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -456,11 +333,11 @@ const AnalysisList = ({ profiles, helperStatus, helperError, budget, onRefresh, 
 
       {helperStatus === 'loading' && (
         <div className="mb-6">
-          <LoadingCallout message="Synchronizuję profile analityczne, budżet i lokalny stan helpera..." />
+          <LoadingCallout message="Synchronizuję profile analityczne i lokalny stan helpera..." />
         </div>
       )}
 
-      <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-3">
+      <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-2">
       <div className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Profile analityczne</p>
         <p className="mt-2 text-2xl font-bold text-white">{profiles.length}</p>
@@ -468,10 +345,6 @@ const AnalysisList = ({ profiles, helperStatus, helperError, budget, onRefresh, 
       <div className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Pozycje w portfelach</p>
         <p className="mt-2 text-2xl font-bold text-white">{profiles.reduce((total, profile) => total + (profile.positions?.length || 0), 0)}</p>
-      </div>
-      <div className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Limit miesięczny</p>
-        <p className="mt-2 text-2xl font-bold text-white">{formatUsd(budget?.monthlyLimitUsd ?? budget?.limitUsd ?? 10)}</p>
       </div>
     </div>
 
@@ -485,18 +358,6 @@ const AnalysisList = ({ profiles, helperStatus, helperError, budget, onRefresh, 
         Brak aktywów do analizy. Zaimportuj pozycje w Dane Live lub dodaj instrument do listy obserwowanych.
       </EmptyState>
     )}
-
-    <div className="mt-8">
-      <BudgetPanel
-        key={`budget-${budget?.monthlyLimitUsd ?? budget?.limitUsd ?? 10}`}
-        budget={budget}
-        helperOnline={helperStatus === 'online'}
-        onUpdate={onBudgetUpdate}
-        onExport={onExport}
-        onImport={onImport}
-        busy={busy}
-      />
-    </div>
   </div>
   );
 };
@@ -544,126 +405,6 @@ const PositionSummaryPanel = ({ positions }) => (
     <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">Biezaca pozycja</p>
     <PositionSummary positions={positions} />
   </div>
-);
-
-const SourceList = ({ sources, helperOnline, busy, onAdd, onDelete }) => {
-  const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ title: '', url: '', role: 'official' });
-
-  const submit = (event) => {
-    event.preventDefault();
-    if (!form.url.trim()) return;
-    onAdd({ ...form, title: form.title.trim() || form.url.trim() }).then(() => {
-      setForm({ title: '', url: '', role: 'official' });
-      setAdding(false);
-    }).catch(() => {});
-  };
-
-  return (
-    <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
-      <SectionHeading
-        title="Źródła"
-        description="Najpierw używane są zapisane źródła. Dodanie lub wyszukanie nowego źródła zawsze wymaga działania użytkownika."
-        action={!adding && (
-          <SecondaryButton disabled={!helperOnline || busy} onClick={() => setAdding(true)}>+ Dodaj źródło</SecondaryButton>
-        )}
-      />
-      {adding && (
-        <form onSubmit={submit} className="mb-4 grid gap-2 rounded-xl border border-slate-700/70 bg-slate-950/60 p-3 md:grid-cols-[1fr_1.2fr_auto_auto]">
-          <input
-            value={form.title}
-            onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))}
-            placeholder="Nazwa źródła"
-            className="rounded-lg border border-slate-700/70 bg-slate-900 px-3 py-2 text-xs text-slate-100 outline-none placeholder:text-slate-600 focus:border-blue-500"
-          />
-          <input
-            value={form.url}
-            onChange={(event) => setForm((current) => ({ ...current, url: event.target.value }))}
-            type="url"
-            required
-            placeholder="https://…"
-            className="rounded-lg border border-slate-700/70 bg-slate-900 px-3 py-2 text-xs text-slate-100 outline-none placeholder:text-slate-600 focus:border-blue-500"
-          />
-          <select
-            value={form.role}
-            onChange={(event) => setForm((current) => ({ ...current, role: event.target.value }))}
-            className="rounded-lg border border-slate-700/70 bg-slate-900 px-3 py-2 text-xs text-slate-200 outline-none focus:border-blue-500"
-          >
-            <option value="official">Oficjalne</option>
-            <option value="reference">Pomocnicze</option>
-          </select>
-          <div className="flex gap-2">
-            <PrimaryButton type="submit" disabled={busy}>Zapisz</PrimaryButton>
-            <SecondaryButton type="button" onClick={() => setAdding(false)}>Anuluj</SecondaryButton>
-          </div>
-        </form>
-      )}
-      {sources?.length ? (
-        <div className="space-y-2">
-          {sources.map((source, index) => {
-            const sourceId = getItemId(source) || source.url || String(index);
-            const url = source.url || source.sourceUrl;
-            return (
-              <div key={sourceId} className="flex flex-col gap-2 rounded-xl border border-slate-800/70 bg-slate-950/45 p-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <a href={url} target="_blank" rel="noreferrer" className="truncate text-sm font-semibold text-blue-300 hover:text-blue-200 hover:underline">
-                      {source.title || source.name || url}
-                    </a>
-                    <Badge>{source.role === 'official' ? 'oficjalne' : 'pomocnicze'}</Badge>
-                  </div>
-                  <p className="mt-1 truncate font-mono text-[11px] text-slate-500">{url}</p>
-                </div>
-                {source.persisted !== false && getItemId(source) && (
-                  <ActionButton
-                    className="self-start text-slate-500 hover:bg-rose-500/10 hover:text-rose-300 sm:self-auto"
-                    disabled={!helperOnline || busy}
-                    onClick={() => onDelete(getItemId(source))}
-                    title="Usuń zapisane źródło"
-                  >
-                    Usuń
-                  </ActionButton>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      ) : <EmptyState>Nie zapisano źródeł. Możesz dodać oficjalną stronę emitenta albo później zlecić ich wyszukanie.</EmptyState>}
-    </section>
-  );
-};
-
-const CandidateList = ({ candidates, helperOnline, busy, onDiscover, onApprove }) => (
-  <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
-    <SectionHeading
-      title="Kandydaci dokumentów"
-      description="Najpierw wybierasz dokument, dopiero potem pobierany jest oryginał i może powstać płatna analiza."
-      action={<PrimaryButton disabled={!helperOnline || busy} onClick={onDiscover}>Wyszukaj dokument</PrimaryButton>}
-    />
-    {candidates?.length ? (
-      <div className="space-y-2">
-        {candidates.map((candidate, index) => {
-          const candidateId = getItemId(candidate) || String(index);
-          const url = candidate.url || candidate.sourceUrl;
-          return (
-            <div key={candidateId} className="flex flex-col gap-3 rounded-xl border border-slate-800/70 bg-slate-950/50 p-3 lg:flex-row lg:items-center lg:justify-between">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  {url ? <a href={url} target="_blank" rel="noreferrer" className="text-sm font-semibold text-blue-300 hover:underline">{candidate.title || candidate.name || 'Dokument'}</a> : <p className="text-sm font-semibold text-slate-200">{candidate.title || candidate.name || 'Dokument'}</p>}
-                  {candidate.type && <Badge>{candidate.type}</Badge>}
-                  {candidate.period && <Badge>{candidate.period}</Badge>}
-                </div>
-                <p className="mt-1 text-xs text-slate-500">{candidate.sourceTitle || candidate.publisher || 'Źródło znalezione na żądanie'}{candidate.publishedAt ? ` · ${formatDate(candidate.publishedAt)}` : ''}</p>
-              </div>
-              <PrimaryButton disabled={!helperOnline || busy || !getItemId(candidate)} onClick={() => onApprove(getItemId(candidate))}>
-                Zatwierdź i pobierz
-              </PrimaryButton>
-            </div>
-          );
-        })}
-      </div>
-    ) : <EmptyState>Nie wyszukiwano jeszcze kandydatów w tej sesji.</EmptyState>}
-  </section>
 );
 
 const createInitialDocumentMetadata = () => ({
@@ -1891,7 +1632,6 @@ const AnalysisPreview = ({
       />
       <div className="mb-4 flex flex-wrap gap-2">
         <Badge status={analysis.status}>{getStatusLabel(analysis.status)}</Badge>
-        {analysis.costUsd !== undefined && <Badge>Koszt: {formatUsd(analysis.costUsd)}</Badge>}
         {analysis.documentIds?.length && <Badge>Dokumenty: {analysis.documentIds.length}</Badge>}
       </div>
       {!isolatedPreview && (
@@ -2101,7 +1841,7 @@ const AnalysisHistory = ({ analyses, activeAnalysisId, helperOnline, busy, onSel
                   <p className="text-sm font-semibold text-slate-200">{analysis.title || `Analiza ${formatDate(analysis.createdAt || analysis.updatedAt)}`}</p>
                   {isActive && <Badge status="online">podgląd</Badge>}
                 </div>
-                <p className="mt-1 text-xs text-slate-500">{analysis.model || analysis.provider || 'model niepodany'} · {analysis.schemaVersion || analysis.version || 'v1'} · {analysis.costUsd === undefined ? 'koszt niepodany' : formatUsd(analysis.costUsd)}</p>
+                <p className="mt-1 text-xs text-slate-500">{analysis.model || analysis.provider || 'model niepodany'} · {analysis.schemaVersion || analysis.version || 'v1'}</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <Badge status={analysis.status}>{getStatusLabel(analysis.status)}</Badge>
@@ -2143,26 +1883,16 @@ const AnalysisSettingsModal = ({
   helperOnline,
   loading,
   busy,
-  budget,
-  sources,
-  candidates,
   documents,
   analyses,
   activeAnalysisId,
   onClose,
   onRefresh,
   onRunAnalysis,
-  onAddSource,
-  onDeleteSource,
-  onDiscover,
-  onApproveCandidate,
   onToggleDocument,
   onImportDocument,
   onDeleteDocument,
   getDownloadUrl,
-  onBudgetUpdate,
-  onExport,
-  onImport,
   onSelectAnalysis,
   onRenameAnalysis,
   onDeleteAnalysis,
@@ -2176,15 +1906,14 @@ const AnalysisSettingsModal = ({
           <div>
             <p className="text-xs font-bold uppercase tracking-wide text-blue-300">Konfiguracja analizy</p>
             <h3 className="mt-1 text-lg font-bold text-white">{profile?.name || 'Instrument'}</h3>
-            <p className="mt-1 text-xs leading-5 text-slate-500">Dokumenty, źródła, historia, budżet i backup w jednym miejscu.</p>
+            <p className="mt-1 text-xs leading-5 text-slate-500">Ręczne dokumenty i historia analiz w jednym miejscu.</p>
           </div>
           <ActionButton className="self-start border border-slate-700/70 bg-slate-800/60 px-3 py-2 text-slate-200 hover:bg-slate-800" onClick={onClose}>
             Zamknij
           </ActionButton>
         </div>
         <div className="overflow-y-auto p-5">
-          <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <div className="space-y-5">
+          <div className="space-y-5">
               <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
                 <SectionHeading
                   title="Konfiguracja analizy"
@@ -2225,33 +1954,6 @@ const AnalysisSettingsModal = ({
                 onRenameRequest={onRenameAnalysis}
                 onDeleteRequest={onDeleteAnalysis}
               />
-            </div>
-            <div className="space-y-5">
-              <SourceList
-                sources={sources}
-                helperOnline={helperOnline}
-                busy={busy}
-                onAdd={onAddSource}
-                onDelete={onDeleteSource}
-              />
-              <CandidateList
-                candidates={candidates}
-                helperOnline={helperOnline}
-                busy={busy}
-                onDiscover={onDiscover}
-                onApprove={onApproveCandidate}
-              />
-              <BudgetPanel
-                key={`settings-budget-${budget?.monthlyLimitUsd ?? budget?.limitUsd ?? 10}`}
-                budget={budget}
-                helperOnline={helperOnline}
-                onUpdate={onBudgetUpdate}
-                onExport={onExport}
-                onImport={onImport}
-                busy={busy}
-                compact
-              />
-            </div>
           </div>
         </div>
       </div>
@@ -2279,15 +1981,13 @@ const getProfileParts = (response, fallback) => {
   );
   return {
     profile: { ...fallback, ...profile },
-    sources: pickArray('sources'),
     documents: pickArray('documents'),
-    candidates: pickArray('candidates'),
     analyses: pickArray('analyses'),
     reportMetrics: pickArray('reportMetrics'),
   };
 };
 
-const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperError, budget, onRefreshOverview, onBudgetUpdate, onExport, onImport, busy, setBusy, setNotice }) => {
+const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperError, onRefreshOverview, busy, setBusy, setNotice }) => {
   const [detail, setDetail] = useState(() => getProfileParts(null, fallbackProfile));
   const [loading, setLoading] = useState(false);
   const [operationMessage, setOperationMessage] = useState('');
@@ -2308,7 +2008,6 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
 
   const helperOnline = helperStatus === 'online';
   const profile = detail.profile || fallbackProfile;
-  const sources = detail.sources.length ? detail.sources : profile.sources || [];
   const selectionModel = useMemo(() => buildAnalysisSelectionModel(detail.analyses), [detail.analyses]);
   const effectiveSelectedReportAnalysisId = selectionModel.reportOptions.some(
     (option) => option.analysisId === selectedReportAnalysisId,
@@ -2349,17 +2048,13 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
     setLoading(true);
     setDetailError('');
     try {
-      const [profileResult, sourcesResult, documentsResult, candidatesResult, analysesResult] = await Promise.all([
+      const [profileResult, documentsResult, analysesResult] = await Promise.all([
         analysisApi.getProfile(assetId),
-        analysisApi.listSources(assetId),
         analysisApi.listDocuments(assetId),
-        analysisApi.listCandidates(assetId),
         analysisApi.listAnalyses(assetId),
       ]);
       const next = getProfileParts(profileResult, fallbackProfile);
-      next.sources = sourcesResult.length ? sourcesResult : next.sources;
       next.documents = documentsResult.length ? documentsResult : next.documents;
-      next.candidates = candidatesResult.length ? candidatesResult : next.candidates;
       next.analyses = analysesResult.length ? analysesResult : next.analyses;
       setDetail(next);
     } catch (error) {
@@ -2412,30 +2107,6 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
       setOperationMessage('');
     }
   };
-
-  const addSource = (source) => perform(async () => {
-    await ensureProfile();
-    return analysisApi.addSource(assetId, source);
-  }, 'Źródło zapisane.', 'Zapisuję źródło w lokalnym profilu analizy...');
-
-  const deleteSource = (sourceId) => perform(
-    () => analysisApi.deleteSource(assetId, sourceId),
-    'Źródło usunięte.',
-    'Usuwam źródło z konfiguracji profilu...',
-  );
-
-  const discover = () => perform(async () => {
-    await ensureProfile();
-    return analysisApi.discoverCandidates(assetId, {
-      sourceIds: sources.map(getItemId).filter(Boolean),
-    });
-  }, 'Wyszukiwanie kandydatów zostało zakończone. Wybierz dokument przed analizą.', 'Szukam dokumentów w zapisanych źródłach...');
-
-  const approveCandidate = (candidateId) => perform(
-    () => analysisApi.approveCandidate(assetId, candidateId, { download: true }),
-    'Dokument został zatwierdzony i zarchiwizowany lokalnie.',
-    'Pobieram i archiwizuję wybrany dokument lokalnie...',
-  );
 
   const importDocument = (file, metadata) => perform(async () => {
     await ensureProfile();
@@ -2565,26 +2236,16 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
         helperOnline={helperOnline}
         loading={loading}
         busy={busy}
-        budget={budget}
-        sources={sources}
-        candidates={detail.candidates}
         documents={detail.documents}
         analyses={detail.analyses}
         activeAnalysisId={getItemId(previewAnalysis)}
         onClose={() => setSettingsOpen(false)}
         onRefresh={refreshDetail}
         onRunAnalysis={runAnalysis}
-        onAddSource={addSource}
-        onDeleteSource={deleteSource}
-        onDiscover={discover}
-        onApproveCandidate={approveCandidate}
         onToggleDocument={toggleDocument}
         onImportDocument={importDocument}
         onDeleteDocument={deleteDocument}
         getDownloadUrl={analysisApi.getDocumentDownloadUrl}
-        onBudgetUpdate={onBudgetUpdate}
-        onExport={onExport}
-        onImport={onImport}
         onSelectAnalysis={(analysisId) => {
           dispatchAnalysisSelection({ type: 'open_preview', analysisId });
           setSettingsOpen(false);
@@ -2595,13 +2256,13 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
 
       {(loading || operationMessage) && (
         <div className="mb-6">
-          <LoadingCallout message={operationMessage || 'Wczytuję profil, źródła, dokumenty i historię analiz...'} />
+          <LoadingCallout message={operationMessage || 'Wczytuję profil, dokumenty i historię analiz...'} />
         </div>
       )}
 
       {detailError && helperOnline && (
         <div className="mb-6 rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-200">
-          {detailError} Jeśli profil nie istnieje jeszcze w bazie, dodanie źródła, import dokumentu albo wyszukiwanie utworzy go lokalnie.
+          {detailError} Jeśli profil nie istnieje jeszcze w bazie, ręczny import dokumentu utworzy go lokalnie.
         </div>
       )}
 
@@ -2659,7 +2320,6 @@ const Analysis = () => {
   const { assetId: routeAssetId } = useParams();
   const liveData = useLiveData();
   const [serverProfiles, setServerProfiles] = useState([]);
-  const [budget, setBudget] = useState(null);
   const [helperStatus, setHelperStatus] = useState('loading');
   const [helperError, setHelperError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -2688,12 +2348,8 @@ const Analysis = () => {
       setHelperStatus('online');
       const positions = toSyncPositions(portfolioAssets);
       await analysisApi.syncProfiles(positions);
-      const [profilesResult, budgetResult] = await Promise.all([
-        analysisApi.listProfiles(),
-        analysisApi.getBudget(),
-      ]);
+      const profilesResult = await analysisApi.listProfiles();
       setServerProfiles(profilesResult);
-      setBudget(budgetResult);
     } catch (error) {
       setHelperStatus('offline');
       setHelperError(error.message || 'Nie udało się połączyć z lokalnym helperem.');
@@ -2731,30 +2387,6 @@ const Analysis = () => {
     () => analysisApi.createProfile(profile),
     'Instrument dodany do listy obserwowanych.',
   );
-  const updateBudget = (limit) => performGlobal(
-    () => analysisApi.updateBudget(limit),
-    'Miesięczny limit został zapisany.',
-  );
-  const exportBackup = () => performGlobal(async () => {
-    const result = await analysisApi.exportBackup(getBrowserState());
-    downloadBackupPayload(result);
-    return result;
-  }, 'Backup został przygotowany.');
-  const importBackup = async (file) => {
-    const result = await performGlobal(
-      () => analysisApi.importBackup(file),
-      'Backup został zaimportowany. Odświeżono lokalny stan analizy.',
-    );
-    const savedState = result?.browserState?.localStorage;
-    if (savedState && typeof savedState === 'object') {
-      Object.entries(savedState).forEach(([key, value]) => {
-        if (PERSISTENT_STATE_KEYS.includes(key) && typeof value === 'string') window.localStorage.setItem(key, value);
-      });
-      await hydratePersistentState();
-      window.setTimeout(() => window.location.reload(), 700);
-    }
-    return result;
-  };
 
   return (
     <>
@@ -2781,11 +2413,7 @@ const Analysis = () => {
           fallbackProfile={fallbackProfile}
           helperStatus={helperStatus}
           helperError={helperError}
-          budget={budget}
           onRefreshOverview={refreshOverview}
-          onBudgetUpdate={updateBudget}
-          onExport={exportBackup}
-          onImport={importBackup}
           busy={busy}
           setBusy={setBusy}
           setNotice={setNotice}
@@ -2795,12 +2423,8 @@ const Analysis = () => {
           profiles={profiles}
           helperStatus={helperStatus}
           helperError={helperError}
-          budget={budget}
           onRefresh={refreshOverview}
           onCreate={createProfile}
-          onBudgetUpdate={updateBudget}
-          onExport={exportBackup}
-          onImport={importBackup}
           busy={busy}
         />
       )}

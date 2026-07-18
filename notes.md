@@ -43,3 +43,5 @@ Reguły structuredSummary:
 - structuredSummary.sections ma zawierać sekcje: Najważniejsze fakty, Zmiana vs rok temu, Jakość wyniku, Ryzyka i kapitał, Co sprawdzić dalej. Dla profilu niebankowego dopasuj nazwy do raportu, ale zachowaj sens tych obszarów.
 - W bullets wyjaśniaj znaczenie danych: co jest korzystne lub niekorzystne, co się poprawiło lub pogorszyło, co wygląda na jednorazowe lub powtarzalne, jakie ryzyka mogą zniekształcać obraz oraz co użytkownik powinien sprawdzić w kolejnym kroku.
 - Gdy bullet opiera się na liczbach, dodaj metricKeys z odpowiednimi metricKey z katalogu i source, jeżeli wniosek ma bezpośrednie zakotwiczenie w dokumencie.
+
+Pozbądź się sekcji "źródła" gdzie się wkleja linki do stron, oraz pozbądź się sekcji "kandydaci dokumentów" - będę tylko ręcznie wgrywał. Pozbądź się też sekcji lokalny budżet i backup. Sprawdzę sobie koszty w developer portalach danych API.

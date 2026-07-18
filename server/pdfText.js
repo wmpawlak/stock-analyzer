@@ -120,7 +120,11 @@ const decodeTextArray = (value, fontDecoder) => {
   return chunks.join('');
 };
 
-const cleanText = (value, maxChars) => value
+const normalizeSpacedUnitLabels = (value) => value
+  .replace(/\bw\s+t\s*y\s*s\s*i\s*[ąa]\s*c\s*a\s*c\s*h\s+z\s*[łl]\s*o\s*t\s*y\s*c\s*h\b/gi, 'w tysiącach złotych')
+  .replace(/\bw\s+m\s*i\s*l\s*i\s*o\s*n\s*a\s*c\s*h\s+z\s*[łl]\s*o\s*t\s*y\s*c\s*h\b/gi, 'w milionach złotych');
+
+const cleanText = (value, maxChars) => normalizeSpacedUnitLabels(value
   .join('\n')
   .replace(/\0/g, ' ')
   .replace(/[^\t\n\r -~ąćęłńóśźżĄĆĘŁŃÓŚŹŻ€%.,:;()[\]/+-]/g, ' ')
@@ -135,7 +139,7 @@ const cleanText = (value, maxChars) => value
   .replace(/\bL\s*\/\s*D\b/g, 'L/D')
   .replace(/\bN\s*P\s*L\b/g, 'NPL')
   .replace(/\bT\s*C\s*R\b/g, 'TCR')
-  .replace(/\bTi\s*er\s*1\b/gi, 'Tier 1')
+  .replace(/\bTi\s*er\s*1\b/gi, 'Tier 1'))
   .trim()
   .slice(0, maxChars);
 

@@ -4,7 +4,6 @@ import {
   getReportMetricsForProfile,
   metricUnitMatchesValueType,
 } from './analysisMetricCatalog.js';
-import { extractPdfText } from './pdfText.js';
 import {
   getReportPeriodInfo,
   inferReportPeriodFromText,
@@ -14,17 +13,19 @@ import {
 
 const PERPLEXITY_ENDPOINT = 'https://api.perplexity.ai/chat/completions';
 const INLINE_TEXT_EXTENSIONS = new Set(['txt', 'rtf', 'html', 'htm', 'csv']);
-const MAX_INLINE_TEXT_CHARS = 180_000;
+const MAX_INLINE_NON_PDF_TEXT_CHARS = 180_000;
+const MAX_PERPLEXITY_PDF_BYTES = 50_000_000;
+const MAX_PERPLEXITY_FILE_ATTACHMENTS = 30;
 
 const SOURCE_SCHEMA = { 
   type: 'object', 
   additionalProperties: false, 
   required: ['documentId', 'page', 'section', 'evidence'], 
   properties: {
-    documentId: { type: 'string' },
+    documentId: { type: 'string', minLength: 1 },
     page: { type: ['integer', 'string', 'null'] },
-    section: { type: 'string' },
-    evidence: { type: 'string' },
+    section: { type: 'string', minLength: 1 },
+    evidence: { type: 'string', minLength: 1 },
   }, 
 }; 
 
@@ -95,76 +96,81 @@ const DISCOVERY_SCHEMA = {
   },
 };
 
-const ANALYSIS_SCHEMA = { 
-  type: 'object', 
-  additionalProperties: false, 
-  required: ['schemaVersion', 'title', 'reportPeriod', 'summary', 'structuredSummary', 'metricFacts', 'risks', 'conclusions', 'extractionWarnings'], 
-  properties: { 
-    schemaVersion: { type: 'string', enum: [ANALYSIS_V2_SCHEMA_VERSION] }, 
-    title: { type: 'string' }, 
-    reportPeriod: { type: 'string' }, 
-    summary: { type: 'string' }, 
-    structuredSummary: STRUCTURED_SUMMARY_SCHEMA,
-    metricFacts: { 
+const METRIC_FACT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['documentId', 'metricKey', 'label', 'value', 'unit', 'period', 'page', 'section', 'quote', 'confidence'],
+  properties: {
+    documentId: { type: 'string', minLength: 1 },
+    metricKey: { type: 'string', minLength: 1 },
+    label: { type: 'string', minLength: 1 },
+    value: { type: ['string', 'number', 'null'] },
+    unit: { type: 'string', minLength: 1 },
+    period: { type: 'string', minLength: 1 },
+    page: { type: ['integer', 'string', 'null'] },
+    section: { type: 'string', minLength: 1 },
+    quote: { type: 'string', minLength: 1 },
+    confidence: { type: 'number', minimum: 0, maximum: 1 },
+  },
+};
+
+const EXTRACTION_WARNING_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['metricKey', 'label', 'reason', 'evidence'],
+  properties: {
+    metricKey: { type: 'string', minLength: 1 },
+    label: { type: 'string', minLength: 1 },
+    reason: { type: 'string', minLength: 1 },
+    evidence: { type: 'string' },
+  },
+};
+
+const METRIC_EXTRACTION_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['metricFacts', 'extractionWarnings'],
+  properties: {
+    metricFacts: {
       type: 'array',
       maxItems: 120,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['metricKey', 'label', 'value', 'unit', 'period', 'page', 'section', 'quote', 'confidence'],
-        properties: {
-          metricKey: { type: 'string' },
-          label: { type: 'string' },
-          value: { type: ['string', 'number', 'null'] },
-          unit: { type: 'string' },
-          period: { type: 'string' },
-          page: { type: ['integer', 'string', 'null'] },
-          section: { type: 'string' },
-          quote: { type: 'string' },
-          confidence: { type: 'number' },
-        },
-      },
-    },
-    risks: {
-      type: 'array',
-      maxItems: 30,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['text', 'source'],
-        properties: {
-          text: { type: 'string' },
-          source: SOURCE_SCHEMA,
-        },
-      },
-    },
-    conclusions: {
-      type: 'array',
-      maxItems: 30,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['text', 'source'],
-        properties: {
-          text: { type: 'string' },
-          source: SOURCE_SCHEMA,
-        },
-      },
+      items: METRIC_FACT_SCHEMA,
     },
     extractionWarnings: {
       type: 'array',
       maxItems: 60,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['metricKey', 'label', 'reason', 'evidence'],
-        properties: {
-          metricKey: { type: 'string' },
-          label: { type: 'string' },
-          reason: { type: 'string' },
-          evidence: { type: 'string' },
-        },
-      },
+      items: EXTRACTION_WARNING_SCHEMA,
+    },
+  },
+};
+
+const SYNTHESIS_ITEM_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['text', 'source'],
+  properties: {
+    text: { type: 'string', minLength: 1 },
+    source: SOURCE_SCHEMA,
+  },
+};
+
+const SYNTHESIS_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['title', 'summary', 'structuredSummary', 'risks', 'conclusions'],
+  properties: {
+    title: { type: 'string', minLength: 1 },
+    summary: { type: 'string', minLength: 1 },
+    structuredSummary: STRUCTURED_SUMMARY_SCHEMA,
+    risks: {
+      type: 'array',
+      maxItems: 30,
+      items: SYNTHESIS_ITEM_SCHEMA,
+    },
+    conclusions: {
+      type: 'array',
+      maxItems: 30,
+      items: SYNTHESIS_ITEM_SCHEMA,
     },
   },
 };
@@ -178,6 +184,23 @@ const safeJson = (text, fallback) => {
   } catch {
     return fallback;
   }
+};
+
+const strictJsonObject = (text, responseLabel) => {
+  if (typeof text !== 'string') {
+    throw new AppError('PERPLEXITY_INVALID_RESPONSE', `Perplexity zwrócił wynik ${responseLabel}, który nie jest tekstem JSON.`, 502);
+  }
+  const trimmed = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new AppError('PERPLEXITY_INVALID_RESPONSE', `Perplexity zwrócił niepoprawny JSON ${responseLabel}.`, 502);
+  }
+  if (!isPlainObject(parsed)) {
+    throw new AppError('PERPLEXITY_INVALID_RESPONSE', `Perplexity zwrócił JSON ${responseLabel} o niepoprawnym kształcie.`, 502);
+  }
+  return parsed;
 };
 
 const readCost = (payload) => {
@@ -206,6 +229,16 @@ const normalizeCitations = (payload) => {
     .slice(0, 30);
 };
 
+const mergeCitations = (...collections) => {
+  const seen = new Set();
+  return collections.flat().filter((citation) => {
+    const url = stringOrEmpty(citation?.url);
+    if (!url || seen.has(url)) return false;
+    seen.add(url);
+    return true;
+  }).slice(0, 30);
+};
+
 const fetchFailureMessage = (error) => {
   const code = stringOrEmpty(error?.cause?.code);
   const base = stringOrEmpty(error?.message) || 'fetch failed';
@@ -229,6 +262,20 @@ const isTransientFetchError = (error) => [
   'ETIMEDOUT',
   'EPIPE',
 ].includes(stringOrEmpty(error?.cause?.code));
+
+const confirmedCost = (value) => {
+  const cost = Number(value);
+  return Number.isFinite(cost) && cost > 0 ? cost : 0;
+};
+
+const addConfirmedCostToError = (error, costUsd) => {
+  const target = error instanceof Error
+    ? error
+    : new AppError('PERPLEXITY_INVALID_RESPONSE', 'Nie udało się przetworzyć odpowiedzi Perplexity.', 502);
+  const total = Number((confirmedCost(target.confirmedCostUsd) + confirmedCost(costUsd)).toFixed(8));
+  if (total > 0) target.confirmedCostUsd = total;
+  return target;
+};
 
 const requestCompletion = async ({ apiKey, model, messages, schema, fetchImpl = fetch }) => {
   const key = stringOrEmpty(apiKey);
@@ -265,15 +312,19 @@ const requestCompletion = async ({ apiKey, model, messages, schema, fetchImpl = 
     }
   }
   const payload = await response.json().catch(() => null);
+  const costUsd = readCost(payload);
   if (!response.ok) {
     const message = stringOrEmpty(payload?.error?.message) || `Perplexity zwrócił HTTP ${response.status}.`;
-    throw new AppError('PERPLEXITY_ERROR', message, 502);
+    throw addConfirmedCostToError(new AppError('PERPLEXITY_ERROR', message, 502), costUsd);
   }
   const content = payload?.choices?.[0]?.message?.content;
   if (typeof content !== 'string' || !content.trim()) {
-    throw new AppError('PERPLEXITY_INVALID_RESPONSE', 'Perplexity nie zwrócił treści analizy.', 502);
+    throw addConfirmedCostToError(
+      new AppError('PERPLEXITY_INVALID_RESPONSE', 'Perplexity nie zwrócił treści analizy.', 502),
+      costUsd,
+    );
   }
-  return { payload, content, costUsd: readCost(payload), citations: normalizeCitations(payload) };
+  return { payload, content, costUsd, citations: normalizeCitations(payload) };
 };
 
 const asCandidate = (value) => {
@@ -319,13 +370,12 @@ export const discoverCandidatesWithPerplexity = async ({ apiKey, profile, source
 
 const textFromBuffer = (document, buffer) => {
   const extension = extensionOf(document.filename);
-  if (extension === 'pdf') return extractPdfText(buffer, { maxChars: MAX_INLINE_TEXT_CHARS });
   if (!INLINE_TEXT_EXTENSIONS.has(extension)) return '';
   const text = buffer.toString('utf8').split('\0').join('');
   if (extension === 'html' || extension === 'htm') {
-    return text.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ').replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, MAX_INLINE_TEXT_CHARS);
+    return text.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ').replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, MAX_INLINE_NON_PDF_TEXT_CHARS);
   }
-  return text.slice(0, MAX_INLINE_TEXT_CHARS);
+  return text.slice(0, MAX_INLINE_NON_PDF_TEXT_CHARS);
 };
 
 const documentReportPeriod = (document) => (
@@ -335,16 +385,50 @@ const documentReportPeriod = (document) => (
 
 const documentContentPart = (document, buffer) => {
   const extension = extensionOf(document.filename);
+  if (extension === 'pdf') {
+    if (!Buffer.isBuffer(buffer) || buffer.length < 5 || buffer.subarray(0, 5).toString('ascii') !== '%PDF-') {
+      throw new AppError(
+        'PERPLEXITY_INVALID_PDF',
+        `Plik „${document.filename}” nie ma poprawnego nagłówka PDF.`,
+        400,
+      );
+    }
+    if (buffer.length > MAX_PERPLEXITY_PDF_BYTES) {
+      throw new AppError(
+        'PERPLEXITY_PDF_TOO_LARGE',
+        `Plik „${document.filename}” przekracza limit 50 MB dla załącznika Perplexity.`,
+        413,
+      );
+    }
+    return {
+      type: 'file_url',
+      file_url: { url: buffer.toString('base64') },
+    };
+  }
   const inline = textFromBuffer(document, buffer);
   if (inline) {
-    const extractionNote = extension === 'pdf' ? ' (tekst wyodrebniony lokalnie z PDF)' : '';
-    return { type: 'text', text: `\n\n--- ${document.filename}${extractionNote} ---\n${inline}` };
+    return { type: 'text', text: `\n\n--- ${document.filename} ---\n${inline}` };
   }
   const source = stringOrEmpty(document.sourceUrl);
   return {
     type: 'text',
     text: `\n\nDokument ${document.filename} ma format ${extension.toUpperCase()}, którego nie dołączono binarnie. Korzystaj wyłącznie z zarchiwizowanej metadanej i oficjalnego adresu: ${source || 'brak URL'}. Nie wymyślaj danych niedostępnych w pliku.`,
   };
+};
+
+const documentContentParts = (documents, documentBuffers) => {
+  const pdfCount = documents.reduce(
+    (count, document) => count + (extensionOf(document.filename) === 'pdf' ? 1 : 0),
+    0,
+  );
+  if (pdfCount > MAX_PERPLEXITY_FILE_ATTACHMENTS) {
+    throw new AppError(
+      'PERPLEXITY_TOO_MANY_FILES',
+      'Request do Perplexity może zawierać maksymalnie 30 załączników PDF.',
+      400,
+    );
+  }
+  return documents.map((document, index) => documentContentPart(document, documentBuffers[index]));
 };
 
 const sourceLabel = (source) => {
@@ -365,6 +449,175 @@ const metricFactToMetric = (fact) => ({
 }); 
 
 const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const hasExactKeys = (value, expectedKeys) => {
+  if (!isPlainObject(value)) return false;
+  const actualKeys = Object.keys(value).sort();
+  const sortedExpected = [...expectedKeys].sort();
+  return actualKeys.length === sortedExpected.length
+    && actualKeys.every((key, index) => key === sortedExpected[index]);
+};
+
+const isNonEmptyString = (value) => typeof value === 'string' && Boolean(value.trim());
+
+const extractionShapeErrors = (value) => {
+  const errors = [];
+  if (!hasExactKeys(value, ['metricFacts', 'extractionWarnings'])) {
+    return ['root must contain only metricFacts and extractionWarnings'];
+  }
+  if (!Array.isArray(value.metricFacts) || value.metricFacts.length > 120) {
+    errors.push('metricFacts must be an array with at most 120 items');
+  }
+  if (!Array.isArray(value.extractionWarnings) || value.extractionWarnings.length > 60) {
+    errors.push('extractionWarnings must be an array with at most 60 items');
+  }
+
+  (Array.isArray(value.metricFacts) ? value.metricFacts : []).forEach((fact, index) => {
+    const fields = ['documentId', 'metricKey', 'label', 'value', 'unit', 'period', 'page', 'section', 'quote', 'confidence'];
+    if (!hasExactKeys(fact, fields)) {
+      errors.push(`metricFacts[${index}] has fields incompatible with the extraction schema`);
+      return;
+    }
+    ['documentId', 'metricKey', 'label', 'unit', 'period', 'section', 'quote'].forEach((field) => {
+      if (!isNonEmptyString(fact[field])) errors.push(`metricFacts[${index}].${field} must be a non-empty string`);
+    });
+    if (!(fact.value === null || typeof fact.value === 'string' || (typeof fact.value === 'number' && Number.isFinite(fact.value)))) {
+      errors.push(`metricFacts[${index}].value must be a string, finite number or null`);
+    }
+    if (!(fact.page === null || typeof fact.page === 'string' || Number.isInteger(fact.page))) {
+      errors.push(`metricFacts[${index}].page must be an integer, string or null`);
+    }
+    if (typeof fact.confidence !== 'number' || !Number.isFinite(fact.confidence) || fact.confidence < 0 || fact.confidence > 1) {
+      errors.push(`metricFacts[${index}].confidence must be a number from 0 to 1`);
+    }
+  });
+
+  (Array.isArray(value.extractionWarnings) ? value.extractionWarnings : []).forEach((warning, index) => {
+    const fields = ['metricKey', 'label', 'reason', 'evidence'];
+    if (!hasExactKeys(warning, fields)) {
+      errors.push(`extractionWarnings[${index}] has fields incompatible with the extraction schema`);
+      return;
+    }
+    ['metricKey', 'label', 'reason'].forEach((field) => {
+      if (!isNonEmptyString(warning[field])) errors.push(`extractionWarnings[${index}].${field} must be a non-empty string`);
+    });
+    if (typeof warning.evidence !== 'string') errors.push(`extractionWarnings[${index}].evidence must be a string`);
+  });
+
+  return errors;
+};
+
+const parseMetricExtraction = (content) => {
+  const parsed = strictJsonObject(content, 'ekstrakcji metryk');
+  const errors = extractionShapeErrors(parsed);
+  if (errors.length) {
+    throw new AppError(
+      'PERPLEXITY_INVALID_RESPONSE',
+      'Perplexity zwrócił wynik ekstrakcji niezgodny ze schematem.',
+      502,
+      { errors: errors.slice(0, 20) },
+    );
+  }
+  return parsed;
+};
+
+const sourceShapeErrors = (source, path, allowedDocumentIds) => {
+  if (!hasExactKeys(source, ['documentId', 'page', 'section', 'evidence'])) {
+    return [`${path} must contain documentId, page, section and evidence`];
+  }
+  const errors = [];
+  if (!isNonEmptyString(source.documentId) || !allowedDocumentIds.has(source.documentId)) {
+    errors.push(`${path}.documentId must reference an analyzed document`);
+  }
+  if (!(source.page === null || typeof source.page === 'string' || Number.isInteger(source.page))) {
+    errors.push(`${path}.page must be an integer, string or null`);
+  }
+  if (!isNonEmptyString(source.section)) errors.push(`${path}.section must be a non-empty string`);
+  if (!isNonEmptyString(source.evidence)) errors.push(`${path}.evidence must be a non-empty string`);
+  return errors;
+};
+
+const synthesisShapeErrors = (value, allowedDocumentIds) => {
+  if (!hasExactKeys(value, ['title', 'summary', 'structuredSummary', 'risks', 'conclusions'])) {
+    return ['root must contain only title, summary, structuredSummary, risks and conclusions'];
+  }
+  const errors = [];
+  if (!isNonEmptyString(value.title)) errors.push('title must be a non-empty string');
+  if (!isNonEmptyString(value.summary)) errors.push('summary must be a non-empty string');
+
+  const structured = value.structuredSummary;
+  if (!hasExactKeys(structured, ['headline', 'stance', 'sections'])) {
+    errors.push('structuredSummary has an invalid shape');
+  } else {
+    if (!isNonEmptyString(structured.headline)) errors.push('structuredSummary.headline must be a non-empty string');
+    if (!['pozytywny', 'mieszany', 'ostrozny', 'negatywny'].includes(structured.stance)) {
+      errors.push('structuredSummary.stance is invalid');
+    }
+    if (!Array.isArray(structured.sections) || structured.sections.length < 3 || structured.sections.length > 7) {
+      errors.push('structuredSummary.sections must contain from 3 to 7 sections');
+    }
+    (Array.isArray(structured.sections) ? structured.sections : []).forEach((section, sectionIndex) => {
+      if (!hasExactKeys(section, ['title', 'bullets'])) {
+        errors.push(`structuredSummary.sections[${sectionIndex}] has an invalid shape`);
+        return;
+      }
+      if (!isNonEmptyString(section.title)) errors.push(`structuredSummary.sections[${sectionIndex}].title must be a non-empty string`);
+      if (!Array.isArray(section.bullets) || !section.bullets.length || section.bullets.length > 5) {
+        errors.push(`structuredSummary.sections[${sectionIndex}].bullets must contain from 1 to 5 items`);
+      }
+      (Array.isArray(section.bullets) ? section.bullets : []).forEach((bullet, bulletIndex) => {
+        const path = `structuredSummary.sections[${sectionIndex}].bullets[${bulletIndex}]`;
+        if (!isPlainObject(bullet)) {
+          errors.push(`${path} must be an object`);
+          return;
+        }
+        const keys = Object.keys(bullet);
+        if (!keys.includes('text') || keys.some((key) => !['text', 'metricKeys', 'source'].includes(key))) {
+          errors.push(`${path} has fields incompatible with the synthesis schema`);
+          return;
+        }
+        if (!isNonEmptyString(bullet.text)) errors.push(`${path}.text must be a non-empty string`);
+        if (bullet.metricKeys !== undefined && (
+          !Array.isArray(bullet.metricKeys)
+          || bullet.metricKeys.length > 6
+          || bullet.metricKeys.some((key) => !isNonEmptyString(key))
+        )) errors.push(`${path}.metricKeys must contain at most 6 non-empty strings`);
+        if (bullet.source !== undefined) errors.push(...sourceShapeErrors(bullet.source, `${path}.source`, allowedDocumentIds));
+      });
+    });
+  }
+
+  ['risks', 'conclusions'].forEach((collection) => {
+    if (!Array.isArray(value[collection]) || value[collection].length > 30) {
+      errors.push(`${collection} must be an array with at most 30 items`);
+      return;
+    }
+    value[collection].forEach((item, index) => {
+      const path = `${collection}[${index}]`;
+      if (!hasExactKeys(item, ['text', 'source'])) {
+        errors.push(`${path} has an invalid shape`);
+        return;
+      }
+      if (!isNonEmptyString(item.text)) errors.push(`${path}.text must be a non-empty string`);
+      errors.push(...sourceShapeErrors(item.source, `${path}.source`, allowedDocumentIds));
+    });
+  });
+  return errors;
+};
+
+const parseSynthesis = (content, allowedDocumentIds) => {
+  const parsed = strictJsonObject(content, 'syntezy');
+  const errors = synthesisShapeErrors(parsed, allowedDocumentIds);
+  if (errors.length) {
+    throw new AppError(
+      'PERPLEXITY_INVALID_RESPONSE',
+      'Perplexity zwrócił wynik syntezy niezgodny ze schematem.',
+      502,
+      { errors: errors.slice(0, 20) },
+    );
+  }
+  return parsed;
+};
 
 const normaliseSummaryBullet = (bullet) => {
   if (typeof bullet === 'string') return { text: bullet };
@@ -416,17 +669,105 @@ const numericMetricValue = (value) => {
   return Number.isFinite(number) ? number : null;
 };
 
-const normalizeMetricFacts = ({ facts, reportPeriod, catalog }) => {
+const warningKey = (warning) => [
+  stringOrEmpty(warning?.metricKey).toLowerCase(),
+  stringOrEmpty(warning?.reason).toLowerCase(),
+  stringOrEmpty(warning?.evidence).toLowerCase(),
+].join('\u0000');
+
+const deduplicateWarnings = (warnings) => {
+  const seen = new Set();
+  return warnings.filter((warning) => {
+    if (!isPlainObject(warning)) return false;
+    const normalized = {
+      metricKey: stringOrEmpty(warning.metricKey),
+      label: stringOrEmpty(warning.label) || stringOrEmpty(warning.metricKey),
+      reason: stringOrEmpty(warning.reason),
+      evidence: stringOrEmpty(warning.evidence),
+    };
+    if (!normalized.metricKey || !normalized.reason) return false;
+    const key = warningKey(normalized);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    Object.assign(warning, normalized);
+    return true;
+  });
+};
+
+const metricFactScore = (fact) => (
+  Number(fact.confidence || 0) * 100
+  + (fact.page !== null && fact.page !== undefined && fact.page !== '' ? 2 : 0)
+  + (stringOrEmpty(fact.section) ? 1 : 0)
+  + Math.min(stringOrEmpty(fact.quote).length, 200) / 1000
+);
+
+const normalizeMetricFacts = ({
+  facts,
+  reportPeriod,
+  catalog,
+  allowedDocumentIds,
+  modelWarnings = [],
+  requireDocumentId = false,
+  requireExactPeriod = false,
+  requireValue = false,
+  addMissingPrimaryWarnings = false,
+  warnOnUnknownMetric = false,
+}) => {
   const specs = new Map(catalog.map((spec) => [spec.metricKey, spec]));
   const selected = new Map();
+  const modelWarningList = deduplicateWarnings(modelWarnings.map((warning) => ({ ...warning })));
   const warnings = [];
+  const documentIdSet = allowedDocumentIds instanceof Set
+    ? allowedDocumentIds
+    : Array.isArray(allowedDocumentIds) ? new Set(allowedDocumentIds) : null;
 
   for (const fact of facts) {
     if (!isPlainObject(fact)) continue;
     const factPeriod = normalizeReportMetricPeriod(fact.period, reportPeriod);
-    if (reportPeriod && factPeriod && factPeriod !== reportPeriod) continue;
     const spec = specs.get(stringOrEmpty(fact.metricKey));
-    if (!spec) continue;
+    if (!spec) {
+      if (warnOnUnknownMetric) {
+        warnings.push({
+          metricKey: stringOrEmpty(fact.metricKey) || 'unknown',
+          label: stringOrEmpty(fact.label) || stringOrEmpty(fact.metricKey) || 'Nieznana metryka',
+          reason: 'Odrzucono metrykę spoza zatwierdzonego katalogu.',
+          evidence: stringOrEmpty(fact.quote),
+        });
+      }
+      continue;
+    }
+    if (reportPeriod && ((requireExactPeriod && factPeriod !== reportPeriod) || (factPeriod && factPeriod !== reportPeriod))) {
+      warnings.push({
+        metricKey: spec.metricKey,
+        label: spec.label,
+        reason: `Odrzucono wartość spoza okresu raportowego ${reportPeriod}.`,
+        evidence: stringOrEmpty(fact.quote),
+      });
+      continue;
+    }
+    const documentId = stringOrEmpty(fact.documentId);
+    if (requireDocumentId && (!documentId || !documentIdSet?.has(documentId))) {
+      warnings.push({
+        metricKey: spec.metricKey,
+        label: spec.label,
+        reason: 'Odrzucono wartość wskazującą dokument spoza analizowanego zestawu.',
+        evidence: stringOrEmpty(fact.quote),
+      });
+      continue;
+    }
+    if (requireValue && (
+      fact.value === null
+      || fact.value === undefined
+      || (typeof fact.value === 'string' && !fact.value.trim())
+    )) {
+      warnings.push({
+        metricKey: spec.metricKey,
+        label: spec.label,
+        reason: 'Odrzucono metricFact bez odnalezionej wartości.',
+        evidence: stringOrEmpty(fact.quote),
+      });
+      continue;
+    }
     const number = numericMetricValue(fact.value);
     const evidence = stringOrEmpty(fact.quote);
     const incompatibleUnit = fact.value !== null && fact.value !== undefined
@@ -454,7 +795,7 @@ const normalizeMetricFacts = ({ facts, reportPeriod, catalog }) => {
       period: reportPeriod || stringOrEmpty(fact.period),
     };
     const current = selected.get(spec.metricKey);
-    if (!current || Number(normalizedFact.confidence || 0) > Number(current.confidence || 0)) {
+    if (!current || metricFactScore(normalizedFact) > metricFactScore(current)) {
       if (current) {
         warnings.push({
           metricKey: spec.metricKey,
@@ -474,50 +815,21 @@ const normalizeMetricFacts = ({ facts, reportPeriod, catalog }) => {
     }
   }
 
-  return { metricFacts: [...selected.values()].slice(0, 120), warnings };
-};
+  if (addMissingPrimaryWarnings) {
+    catalog.filter((spec) => spec.tier === 'primary' && !selected.has(spec.metricKey)).forEach((spec) => {
+      if ([...warnings, ...modelWarningList].some((warning) => stringOrEmpty(warning.metricKey) === spec.metricKey)) return;
+      warnings.push({
+        metricKey: spec.metricKey,
+        label: spec.label,
+        reason: `Nie znaleziono wiarygodnej wartości metryki primary dla okresu ${reportPeriod}.`,
+        evidence: '',
+      });
+    });
+  }
 
-const normaliseAnalysis = (parsed, fallback, profile) => {
-  const reportPeriod = normalizeReportPeriod(fallback.reportPeriod) || normalizeReportPeriod(parsed?.reportPeriod);
-  const normalizedFacts = normalizeMetricFacts({
-    facts: Array.isArray(parsed?.metricFacts) ? parsed.metricFacts.filter(Boolean) : [],
-    reportPeriod,
-    catalog: getReportMetricsForProfile(profile),
-  });
-  const metricFacts = normalizedFacts.metricFacts;
-  const risks = Array.isArray(parsed?.risks) ? parsed.risks.filter(Boolean).slice(0, 30) : [];
-  const conclusions = Array.isArray(parsed?.conclusions) ? parsed.conclusions.filter(Boolean).slice(0, 30) : [];
-  const extractionWarnings = [
-    ...(Array.isArray(parsed?.extractionWarnings) ? parsed.extractionWarnings.filter(Boolean) : []),
-    ...normalizedFacts.warnings,
-  ].slice(0, 60);
-  const legacyMetrics = Array.isArray(parsed?.metrics)
-    ? parsed.metrics
-      .filter(Boolean)
-      .filter((metric) => {
-        const metricPeriod = normalizeReportMetricPeriod(
-          metric?.period || metric?.reportingPeriod || metric?.date || metric?.year,
-          reportPeriod,
-        );
-        return !reportPeriod || !metricPeriod || metricPeriod === reportPeriod;
-      })
-      .map((metric) => (isPlainObject(metric)
-        ? { ...metric, period: reportPeriod || stringOrEmpty(metric.period) }
-        : metric))
-      .slice(0, 120)
-    : metricFacts.map(metricFactToMetric);
-
-  return { 
-    schemaVersion: ANALYSIS_V2_SCHEMA_VERSION, 
-    title: stringOrEmpty(parsed?.title) || fallback.title, 
-    reportPeriod,
-    summary: stringOrEmpty(parsed?.summary) || fallback.summary, 
-    structuredSummary: normaliseStructuredSummary(parsed?.structuredSummary, stringOrEmpty(parsed?.summary) || fallback.summary),
-    metricFacts, 
-    risks, 
-    conclusions,
-    extractionWarnings,
-    metrics: legacyMetrics,
+  return {
+    metricFacts: [...selected.values()].slice(0, 120),
+    warnings: deduplicateWarnings([...warnings, ...modelWarningList]).slice(0, 60),
   };
 };
 
@@ -536,17 +848,6 @@ const metricCatalogForPrompt = (profile) => getReportMetricsForProfile(profile).
   keywords: spec.keywords,
 }));
 
-const annualAnalysisPeriodRules = (year) => `
-Reguły okresu dla raportu rocznego ${year}:
-- To jest analiza pełnego roku ${year}, a nie analiza Q4 ${year}. W reportPeriod oraz period każdego metricFact wpisz dokładnie ${year}.
-- Dla metryk wynikowych, przepływowych i innych metryk z aggregation sum wybieraj wartość obejmującą pełny rok 01.01.${year}-31.12.${year}. Nie używaj samego Q4 ani zakresu 01.10.${year}-31.12.${year} jako wartości rocznej.
-- Dla metryk bilansowych i innych metryk z aggregation point_in_time wybieraj stan na koniec roku, czyli 31.12.${year}. W polu period nadal wpisz ${year}; w kontekście raportu rocznego data 31.12.${year} oznacza koniec roku, nie Q4.
-- Dla metryk z aggregation derived używaj wyłącznie danych wejściowych dotyczących tego samego pełnego roku ${year}.
-- Kolumny za ${year - 1} i inne okresy porównawcze wykorzystuj tylko do opisu zmian w summary oraz structuredSummary. Nie zwracaj ich jako metricFacts.
-- Nie sumuj kwartałów i nie twórz syntetycznej wartości rocznej z Q1-Q4. metricFact roczny musi pochodzić bezpośrednio z raportu rocznego.
-- Dla każdego metricKey zwróć najwyżej jeden metricFact za ${year}.
-`;
-
 const quarterlyAnalysisPeriodRules = `
 Reguły okresu dla raportu kwartalnego:
 - Czytaj wartości tylko z kolumny okresu głównego raportu. Przykład: w raporcie Q1 2025 zwracaj metricFacts tylko dla Q1 2025, a kolumnę Q1 2024 pomiń jako metricFacts.
@@ -557,95 +858,263 @@ Reguły okresu dla raportu kwartalnego:
 - Nie twórz metricFacts dla okresów porównawczych, nawet jeżeli wartości są bezpośrednio widoczne w dokumencie.
 `;
 
-const analysisPeriodRules = (metadata) => {
-  const periods = [...new Set(metadata.map((document) => normalizeReportPeriod(document.period)).filter(Boolean))];
-  const periodInfo = periods.length === 1 ? getReportPeriodInfo(periods[0]) : null;
-  return periodInfo?.isAnnual ? annualAnalysisPeriodRules(periodInfo.year) : quarterlyAnalysisPeriodRules;
+const annualMetricExtractionPeriodRules = (year) => `
+Reguły okresu dla raportu rocznego ${year}:
+- Ekstrahuj wyłącznie wartości pełnego roku ${year}; w period każdego metricFact wpisz dokładnie ${year}.
+- Dla metryk z aggregation sum wybieraj wartość obejmującą 01.01.${year}-31.12.${year}, nigdy samo Q4.
+- Dla metryk z aggregation point_in_time wybieraj stan na 31.12.${year}; w period nadal wpisz ${year}.
+- Dla metryk z aggregation derived używaj wyłącznie danych wejściowych dotyczących pełnego roku ${year}.
+- Kolumny za ${year - 1} i inne okresy porównawcze pomiń w metricFacts.
+- Nie sumuj kwartałów i nie twórz syntetycznej wartości rocznej z Q1-Q4.
+- Dla każdego metricKey zwróć najwyżej jeden metricFact za ${year}.
+`;
+
+const metricExtractionPeriodRules = (reportPeriod) => {
+  const periodInfo = getReportPeriodInfo(reportPeriod);
+  return periodInfo.isAnnual ? annualMetricExtractionPeriodRules(periodInfo.year) : quarterlyAnalysisPeriodRules;
 };
 
-const buildAnalysisPrompt = ({ profile, metadata }) => {
+const buildMetricExtractionPrompt = ({ profile, metadata, reportPeriod }) => {
   const catalog = metricCatalogForPrompt(profile);
-  const periodRules = analysisPeriodRules(metadata);
-  return `Przeanalizuj zatwierdzone dokumenty dla aktywa poniżej. Odpowiedź musi być po polsku i wyłącznie jako JSON zgodny ze schematem.
-
-Cel pracy:
-1. Ekstrakcja faktów: znajdź metryki z katalogu metryk, używając metricKey, aliasów i słów kluczowych.
-2. Kompozycja analizy: napisz summary, structuredSummary, risks i conclusions wyłącznie na podstawie wyekstrahowanych faktów i cytowanych fragmentów dokumentu.
+  return `Wykonaj wyłącznie ekstrakcję metryk i ostrzeżeń z zatwierdzonych dokumentów. Odpowiedź musi być po polsku i wyłącznie jako JSON zgodny ze schematem ekstrakcji.
 
 Twarde reguły:
-- Nie zgaduj. Brak pewnego źródła oznacza brak metricFact i wpis w extractionWarnings.
-- Katalog poniżej jest jedyną listą dozwolonych metricKey. Przejdź kolejno przez każdy wpis katalogu i dla każdego metricKey wykonaj osobną próbę odnalezienia metryki w dokumencie.
-- Przy wyszukiwaniu każdego metricKey używaj łącznie jego pól shortName, namePl, nameEn, aliases, keywords, description, valueType i aggregation. metricKey jest identyfikatorem wyniku, a nazwa w dokumencie może być polska, angielska, skrócona albo opisana jednym z aliasów.
-- Jeżeli znajdziesz wiarygodną wartość zgodną z definicją, typem wartości, jednostką i okresem danego wpisu katalogu, zwróć ją jako metricFact z dokładnie tym metricKey. Nie wymagaj dosłownego wystąpienia samego tekstu metricKey w dokumencie.
-- Metryki z tier primary traktuj jako obowiązkową checklistę: brak wiarygodnego źródła opisz w extractionWarnings. Metryk z tier secondary również aktywnie szukaj i zwróć je, gdy są dobrze uźródłowione; ich braku nie musisz dodawać do extractionWarnings.
-- Nie zbieraj dowolnych liczb ani KPI spoza katalogu jako metricFacts.
-- Przy tekstach wyciągniętych lokalnie z PDF/OCR nie wymagaj idealnego tekstu tabeli: jeżeli nagłówek okresów, kolejność kolumn, etykieta metryki i wartości są widoczne w tym samym fragmencie lub bezpośrednim sąsiedztwie tabeli, zwróć metricFacts z niższą confidence zamiast odrzucać całą metrykę.
-- Artefakty OCR, dodatkowe spacje i rozdzielone litery nie są same w sobie powodem do pominięcia metryki, jeżeli kontekst tabeli pozwala jednoznacznie przypisać wartość do okresu. Nigdy nie sklejaj cyfr z sąsiednich kolumn. Gdy w wierszu występuje kilka wartości, dopasuj każdą komórkę do jej nagłówka i wybierz wyłącznie komórkę okresu głównego raportu.
-- Zachowuj strukturę tekstu wyodrębnionego lokalnie: podziały linii odzwierciedlają wiersze PDF, a komórki w jednej linii należą do tego samego wiersza tabeli. Etykieta zawinięta do kolejnej linii nadal należy do poprzedniego wiersza, jeśli nie zaczyna nowego zestawu wartości.
-- Dla kwot pieniężnych użyj dokładnie waluty i skali widocznej w raporcie, np. tys. PLN, mln EUR, USD albo EUR/akcję. Nie przeliczaj walut i nie preferuj PLN. Brak widocznej jednostki przy kwocie oznacza brak metricFact i wpis w extractionWarnings. Dla wskaźników procentowych wystarczy widoczny znak procentu przy wartości i jednoznaczny nagłówek okresu.
-- Każda liczba w metricFacts musi mieć metricKey, label, value, unit, period, page, section, quote i confidence.
-- Każde risk i conclusion musi mieć source z documentId, page, section i evidence.
-- quote oraz source.evidence mają być krótkimi dowodami z dokumentu, nie parafrazą bez zakotwiczenia.
-- Jeżeli numer strony nie jest dostępny w narzędziu, ustaw page na null, ale nadal wypełnij section i quote/evidence.
+- Nie zgaduj. Brak pewnego źródła oznacza brak metricFact.
+- Katalog poniżej jest jedyną listą dozwolonych metricKey. Przejdź kolejno przez każdy wpis i dla każdego wykonaj osobną próbę odnalezienia metryki.
+- Używaj łącznie pól shortName, namePl, nameEn, aliases, keywords, description, valueType i aggregation. Nie wymagaj dosłownego wystąpienia metricKey w dokumencie.
+- Metryki z tier primary są obowiązkową checklistą. Dla każdej metryki primary bez wiarygodnej wartości dodaj dokładnie jeden extractionWarning.
+- Metryk z tier secondary również aktywnie szukaj i zwracaj, gdy są dobrze uźródłowione. Nie dodawaj warningu wyłącznie z powodu braku metryki secondary.
+- Nie zbieraj dowolnych liczb ani KPI spoza katalogu.
+- Każdy metricFact musi wskazywać documentId jednego z dokumentów wejściowych oraz zawierać metricKey, label, value, unit, period, page, section, quote i confidence.
+- quote ma być krótkim dowodem z dokumentu. Jeśli numer strony jest niedostępny, ustaw page na null, ale nadal wypełnij section i quote.
 - value ma być samą liczbą albo null; pełna jednostka wraz z walutą i skalą trafia tylko do unit.
-- metricKey cost_of_risk oznacza wyłącznie wskaźnik CoR wyrażony w % albo bps. Nie przypisuj do niego kwot pozycji "wynik z tytułu oczekiwanych strat kredytowych", "odpisy aktualizujące" ani "koszty ryzyka prawnego". Takie kwoty nie są CoR i nie mają osobnego metricKey w katalogu.
-- Nie zwracaj rekomendacji kupna/sprzedaży.
+- Przy tekstach wyciągniętych lokalnie z PDF/OCR nie wymagaj idealnego tekstu tabeli. Artefakty OCR, dodatkowe spacje i rozdzielone litery nie są same w sobie powodem do pominięcia metryki, jeżeli kontekst jednoznacznie wiąże wartość z okresem.
+- Nigdy nie sklejaj cyfr z sąsiednich kolumn. Gdy w wierszu występuje kilka wartości, dopasuj każdą komórkę do jej nagłówka i wybierz wyłącznie komórkę okresu głównego raportu.
+- Zachowuj strukturę tekstu wyodrębnionego lokalnie: podziały linii odzwierciedlają wiersze PDF, a komórki w jednej linii należą do tego samego wiersza tabeli.
+- Dla kwot pieniężnych użyj dokładnie waluty i skali widocznej w raporcie, np. tys. PLN, mln EUR, USD albo EUR/akcję. Nie przeliczaj walut i nie preferuj PLN.
+- Jednostka zadeklarowana w tytule, nagłówku, podpisie albo nawiasie obejmującym całą tabelę lub sekcję obowiązuje dla wszystkich jej wierszy. Nie wymagaj powtórzenia jednostki bezpośrednio przy każdej liczbie.
+- Traktuj zapis „w tysiącach złotych”, także rozstrzelony przez PDF/OCR jako „w t y s i ą c a c h z ł o t y c h”, jako wystarczający dowód jednostki tys. PLN. Analogicznie „w milionach złotych” oznacza mln PLN.
+- Dla metryki money_per_share połącz walutę z nagłówka lub zapisu „(w zł)” z informacją „na jedną akcję” w nazwie wiersza i zwróć np. PLN/akcję.
+- Dodaj warning no_unit dopiero wtedy, gdy waluty lub skali nie ma ani w wierszu, ani w obowiązującym nagłówku, podpisie lub kontekście tabeli. Nie odrzucaj wartości tylko dlatego, że jednostka występuje raz nad tabelą.
+- metricKey cost_of_risk oznacza wyłącznie wskaźnik CoR wyrażony w % albo bps. Nie przypisuj do niego kwot odpisów, oczekiwanych strat kredytowych ani kosztów ryzyka prawnego.
+- Nie wykonuj syntezy analitycznej ani oceny inwestycyjnej.
 
-${periodRules}
+Backend ustalił zatwierdzony okres raportowy: ${reportPeriod}.
+${metricExtractionPeriodRules(reportPeriod)}
 
-Reguły structuredSummary:
-- Pisz jak analityk dla człowieka: przystępnie, konkretnie i bez suchego wyliczania liczb.
-- structuredSummary.headline ma zawierać jedną najważniejszą tezę z raportu.
-- structuredSummary.stance ustaw jako syntetyczną ocenę tonu raportu bez rekomendacji inwestycyjnej: pozytywny, mieszany, ostrozny albo negatywny.
-- structuredSummary.sections ma zawierać sekcje: Najważniejsze fakty, Zmiana vs rok temu, Jakość wyniku, Ryzyka i kapitał, Co sprawdzić dalej. Dla profilu niebankowego dopasuj nazwy do raportu, ale zachowaj sens tych obszarów.
-- W bullets wyjaśniaj znaczenie danych: co jest korzystne lub niekorzystne, co się poprawiło lub pogorszyło, co wygląda na jednorazowe lub powtarzalne, jakie ryzyka mogą zniekształcać obraz oraz co użytkownik powinien sprawdzić w kolejnym kroku.
-- Gdy bullet opiera się na liczbach, dodaj metricKeys z odpowiednimi metricKey z katalogu i source, jeżeli wniosek ma bezpośrednie zakotwiczenie w dokumencie.
 Aktywo:
 ${JSON.stringify({ assetId: profile.assetId, type: profile.type, name: profile.name, canonicalId: profile.canonicalId })}
 
-Dokumenty:
+Dokumenty wejściowe i dozwolone documentId:
 ${JSON.stringify(metadata)}
 
 Katalog metryk do ekstrakcji:
 ${JSON.stringify(catalog, null, 2)}`;
 };
 
+const buildSynthesisPrompt = ({ profile, metadata, reportPeriod, metricFacts, extractionWarnings }) => `Wykonaj syntezę analizy zatwierdzonych dokumentów. Odpowiedź musi być po polsku i wyłącznie jako JSON zgodny ze schematem syntezy.
+
+Twarde reguły:
+- Zwróć wyłącznie title, summary, structuredSummary, risks i conclusions.
+- Przekazane metricFacts oraz extractionWarnings są zatwierdzonym, niezmiennym wynikiem backendu. Nie poprawiaj ich, nie uzupełniaj, nie usuwaj, nie przeliczaj i nie generuj ich ponownie.
+- Nie szukaj ponownie metryk katalogowych. Gdy opisujesz liczbę katalogową, korzystaj wyłącznie z przekazanych metricFacts.
+- Oryginalne dokumenty służą do opisania ryzyk, zdarzeń jednorazowych, kontekstu biznesowego, danych porównawczych i wniosków, które nie są metrykami katalogowymi.
+- Dane porównawcze z dokumentów mogą służyć do opisu zmian rok do roku, ale nie mogą zastępować ani zmieniać przekazanych metricFacts dla okresu ${reportPeriod}.
+- Każde risk i conclusion musi mieć source z documentId należącym do dokumentów wejściowych oraz page, section i evidence.
+- source.evidence ma być krótkim dowodem z dokumentu, a nie parafrazą bez zakotwiczenia. Jeśli numer strony nie jest dostępny, ustaw page na null.
+- Pisz jak analityk dla człowieka: przystępnie, konkretnie i bez suchego wyliczania liczb.
+- structuredSummary.headline ma zawierać jedną najważniejszą tezę z raportu.
+- structuredSummary.stance ustaw jako syntetyczną ocenę tonu raportu bez rekomendacji inwestycyjnej: pozytywny, mieszany, ostrozny albo negatywny.
+- structuredSummary.sections ma zawierać od 3 do 7 użytecznych sekcji. Preferuj: Najważniejsze fakty, Zmiana vs rok temu, Jakość wyniku, Ryzyka i kapitał, Co sprawdzić dalej; dla profilu niebankowego dopasuj nazwy do raportu.
+- W bullets wyjaśniaj znaczenie danych: co jest korzystne lub niekorzystne, co się poprawiło lub pogorszyło, co wygląda na jednorazowe lub powtarzalne, jakie ryzyka zniekształcają obraz i co sprawdzić dalej.
+- Gdy bullet opiera się na przekazanej metryce, dodaj wyłącznie jej metricKey w metricKeys. Nie wymyślaj nowych metricKey.
+- Nie zwracaj rekomendacji kupna ani sprzedaży.
+
+Aktywo:
+${JSON.stringify({ assetId: profile.assetId, type: profile.type, name: profile.name, canonicalId: profile.canonicalId })}
+
+Zatwierdzony okres raportowy:
+${reportPeriod}
+
+Dokumenty wejściowe i dozwolone documentId:
+${JSON.stringify(metadata)}
+
+Niezmienne metricFacts z etapu ekstrakcji:
+${JSON.stringify(metricFacts, null, 2)}
+
+Niezmienne extractionWarnings z etapu ekstrakcji:
+${JSON.stringify(extractionWarnings, null, 2)}`;
+
+const metadataFromDocuments = (documents) => documents.map((document) => ({
+  id: document.id,
+  filename: document.filename,
+  title: document.title,
+  type: document.type,
+  period: documentReportPeriod(document),
+  publishedAt: document.publishedAt,
+  sourceUrl: document.sourceUrl,
+}));
+
+const approvedReportPeriodFromDocuments = (documents) => {
+  const periods = [...new Set(documents.map((document) => normalizeReportPeriod(document.period)).filter(Boolean))];
+  if (periods.length !== 1) {
+    throw new AppError(
+      periods.length ? 'DOCUMENT_PERIOD_MISMATCH' : 'DOCUMENT_PERIOD_REQUIRED',
+      periods.length
+        ? 'Dokumenty etapu ekstrakcji muszą mieć ten sam zatwierdzony okres raportowy.'
+        : 'Każdy dokument etapu ekstrakcji musi mieć zatwierdzony okres raportowy.',
+      400,
+    );
+  }
+  return periods[0];
+};
+
+export const extractMetricsWithPerplexity = async ({ apiKey, profile, documents, documentBuffers, fetchImpl }) => {
+  if (!Array.isArray(documents) || !documents.length || !Array.isArray(documentBuffers) || documentBuffers.length !== documents.length) {
+    throw new AppError('NO_DOCUMENTS_SELECTED', 'Wybierz dokumenty do ekstrakcji metryk.', 400);
+  }
+  const reportPeriod = approvedReportPeriodFromDocuments(documents);
+  const metadata = metadataFromDocuments(documents).map((document) => ({ ...document, period: reportPeriod }));
+  const attachments = documentContentParts(documents, documentBuffers);
+  const prompt = buildMetricExtractionPrompt({ profile, metadata, reportPeriod });
+  const messages = [
+    {
+      role: 'system',
+      content: 'Jesteś ostrożnym ekstraktorem danych z raportów spółek, banków i ETF-ów. Zwracasz wyłącznie JSON zgodny ze schematem ekstrakcji.',
+    },
+    { role: 'user', content: [{ type: 'text', text: prompt }, ...attachments] },
+  ];
+  const result = await requestCompletion({
+    apiKey,
+    model: 'sonar-pro',
+    messages,
+    schema: METRIC_EXTRACTION_SCHEMA,
+    fetchImpl,
+  });
+  try {
+    const parsed = parseMetricExtraction(result.content);
+    const normalized = normalizeMetricFacts({
+      facts: parsed.metricFacts,
+      reportPeriod,
+      catalog: getReportMetricsForProfile(profile),
+      allowedDocumentIds: new Set(documents.map((document) => stringOrEmpty(document.id))),
+      modelWarnings: parsed.extractionWarnings,
+      requireDocumentId: true,
+      requireExactPeriod: true,
+      requireValue: true,
+      addMissingPrimaryWarnings: true,
+      warnOnUnknownMetric: true,
+    });
+
+    return {
+      reportPeriod,
+      metricFacts: normalized.metricFacts,
+      extractionWarnings: normalized.warnings,
+      costUsd: result.costUsd,
+      citations: result.citations,
+      model: 'sonar-pro',
+    };
+  } catch (error) {
+    throw addConfirmedCostToError(error, result.costUsd);
+  }
+};
+
+export const synthesizeAnalysisWithPerplexity = async ({
+  apiKey,
+  profile,
+  documents,
+  documentBuffers,
+  reportPeriod,
+  metricFacts,
+  extractionWarnings,
+  fetchImpl,
+}) => {
+  if (!Array.isArray(documents) || !documents.length || !Array.isArray(documentBuffers) || documentBuffers.length !== documents.length) {
+    throw new AppError('NO_DOCUMENTS_SELECTED', 'Wybierz dokumenty do syntezy analizy.', 400);
+  }
+  const metadata = metadataFromDocuments(documents).map((document) => ({ ...document, period: reportPeriod }));
+  const attachments = documentContentParts(documents, documentBuffers);
+  const prompt = buildSynthesisPrompt({ profile, metadata, reportPeriod, metricFacts, extractionWarnings });
+  const messages = [
+    {
+      role: 'system',
+      content: 'Jesteś ostrożnym analitykiem raportów spółek, banków i ETF-ów. Tworzysz wyłącznie syntezę na podstawie niezmiennych faktów backendu i cytowanych dokumentów. Zwracasz tylko JSON zgodny ze schematem syntezy.',
+    },
+    { role: 'user', content: [{ type: 'text', text: prompt }, ...attachments] },
+  ];
+  const result = await requestCompletion({
+    apiKey,
+    model: 'sonar-pro',
+    messages,
+    schema: SYNTHESIS_SCHEMA,
+    fetchImpl,
+  });
+  try {
+    const parsed = parseSynthesis(
+      result.content,
+      new Set(documents.map((document) => stringOrEmpty(document.id))),
+    );
+    return {
+      ...parsed,
+      costUsd: result.costUsd,
+      citations: result.citations,
+      model: 'sonar-pro',
+    };
+  } catch (error) {
+    throw addConfirmedCostToError(error, result.costUsd);
+  }
+};
+
 export const analyzeDocumentsWithPerplexity = async ({ apiKey, profile, documents, documentBuffers, fetchImpl }) => {
   if (!Array.isArray(documents) || !documents.length || !Array.isArray(documentBuffers) || documentBuffers.length !== documents.length) {
     throw new AppError('NO_DOCUMENTS_SELECTED', 'Wybierz dokumenty do analizy.', 400);
   }
-  const attachments = documents.map((document, index) => documentContentPart(document, documentBuffers[index]));
-  const metadata = documents.map((document) => ({
-    id: document.id,
-    filename: document.filename,
-    title: document.title,
-    type: document.type,
-    period: documentReportPeriod(document),
-    publishedAt: document.publishedAt,
-    sourceUrl: document.sourceUrl,
-  }));
-  const prompt = buildAnalysisPrompt({ profile, metadata });
-  const messages = [
-    {
-      role: 'system',
-      content: 'Jesteś ostrożnym analitykiem raportów spółek, banków i ETF-ów. Pracujesz provider-neutralnie: najpierw ekstrahujesz fakty ze źródłami, potem komponujesz analizę tylko z tych faktów. Zwracasz wyłącznie JSON zgodny ze schematem.',
-    },
-    { role: 'user', content: [{ type: 'text', text: prompt }, ...attachments] },
-  ];
-  const result = await requestCompletion({ apiKey, model: 'sonar-pro', messages, schema: ANALYSIS_SCHEMA, fetchImpl });
-  const parsed = safeJson(result.content, {});
-  const documentPeriods = [...new Set(documents.map(documentReportPeriod).filter(Boolean))];
-  const fallback = {
-    title: `Analiza ${profile.name}`,
-    reportPeriod: documentPeriods.length === 1 ? documentPeriods[0] : '',
-    summary: result.content,
-  };
+  const extraction = await extractMetricsWithPerplexity({
+    apiKey,
+    profile,
+    documents,
+    documentBuffers,
+    fetchImpl,
+  });
+  let synthesis;
+  try {
+    synthesis = await synthesizeAnalysisWithPerplexity({
+      apiKey,
+      profile,
+      documents,
+      documentBuffers,
+      reportPeriod: extraction.reportPeriod,
+      metricFacts: extraction.metricFacts,
+      extractionWarnings: extraction.extractionWarnings,
+      fetchImpl,
+    });
+  } catch (error) {
+    throw addConfirmedCostToError(error, extraction.costUsd);
+  }
+  const allowedMetricKeys = new Set(extraction.metricFacts.map((fact) => stringOrEmpty(fact.metricKey)));
+  const structuredSummary = normaliseStructuredSummary(synthesis.structuredSummary, synthesis.summary);
+  structuredSummary.sections.forEach((section) => {
+    section.bullets.forEach((bullet) => {
+      if (Array.isArray(bullet.metricKeys)) {
+        bullet.metricKeys = bullet.metricKeys.filter((metricKey) => allowedMetricKeys.has(metricKey));
+      }
+    });
+  });
   return {
     content: {
-      ...normaliseAnalysis(parsed, fallback, profile),
-      citations: result.citations,
+      schemaVersion: ANALYSIS_V2_SCHEMA_VERSION,
+      title: synthesis.title,
+      reportPeriod: extraction.reportPeriod,
+      summary: synthesis.summary,
+      structuredSummary,
+      metricFacts: extraction.metricFacts,
+      risks: synthesis.risks,
+      conclusions: synthesis.conclusions,
+      extractionWarnings: extraction.extractionWarnings,
+      metrics: extraction.metricFacts.map(metricFactToMetric),
+      citations: mergeCitations(extraction.citations, synthesis.citations),
     },
-    costUsd: result.costUsd,
-    model: 'sonar-pro',
+    costUsd: Number((extraction.costUsd + synthesis.costUsd).toFixed(8)),
+    model: 'sonar-pro (extraction + synthesis)',
   };
 };
