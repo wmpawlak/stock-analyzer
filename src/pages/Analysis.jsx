@@ -172,7 +172,7 @@ const HelperBanner = ({ status, error, onRetry }) => {
           <p className="mt-1 text-xs leading-5 opacity-80">
             {isLoading
               ? 'Pobrane wcześniej dane pozostają lokalne.'
-              : (error || 'Uruchom helper, aby archiwizować dokumenty i korzystać z Perplexity. Widok portfela działa bez niego.')}
+              : (error || 'Uruchom helper, aby archiwizować dokumenty i korzystać z analizy Perplexity lub OpenAI. Widok portfela działa bez niego.')}
           </p>
         </div>
         {!isLoading && <SecondaryButton onClick={onRetry}>Spróbuj ponownie</SecondaryButton>}
@@ -461,13 +461,13 @@ const DocumentList = ({ documents, selectedIds, helperOnline, busy, onToggle, on
         <div className="mb-4">
           <h2 className="text-base font-bold text-white">Archiwum dokumentów</h2>
           <p className="mt-1 text-xs leading-5 text-slate-500">
-            Zaznaczone dokumenty trafią do Perplexity dopiero po kliknięciu „Analizuj”.
+            Zaznaczone dokumenty trafią do wybranego providera dopiero po kliknięciu „Analizuj”.
           </p>
         </div>
       ) : (
         <SectionHeading
           title="Archiwum dokumentów"
-          description="Oryginalny PDF, HTML lub ZIP pozostaje lokalnie. Zaznaczone dokumenty są wysyłane do Perplexity dopiero po kliknięciu „Analizuj”."
+          description="Oryginalny dokument pozostaje lokalnie. Zaznaczone pliki są wysyłane do wybranego providera dopiero po kliknięciu „Analizuj”."
         />
       )}
       <input
@@ -1618,7 +1618,10 @@ const AnalysisPreview = ({
         title={isolatedPreview ? 'Izolowany podgląd analizy' : isDraft ? 'Podgląd szkicu analizy' : 'Podgląd analizy'}
         description={isolatedPreview
           ? `Wyświetlasz wyłącznie dane zapisane w tej wersji · ${formatDate(analysis.createdAt || analysis.updatedAt, { withTime: true })}`
-          : `Schemat ${analysis.schemaVersion || analysis.version || 'v1'} · ${analysis.model || analysis.provider || 'lokalna analiza'} · ${formatDate(analysis.createdAt || analysis.updatedAt, { withTime: true })}`}
+          : `Schemat ${analysis.schemaVersion || analysis.version || 'v1'} · ${[
+            analysis.provider === 'openai' ? 'OpenAI GPT' : analysis.provider === 'perplexity' ? 'Perplexity' : analysis.provider,
+            analysis.model,
+          ].filter(Boolean).join(' · ') || 'lokalna analiza'} · ${formatDate(analysis.createdAt || analysis.updatedAt, { withTime: true })}`}
         action={(isolatedPreview || isDraft) && (
           <div className="flex flex-wrap items-center gap-2">
             {isolatedPreview && <SecondaryButton onClick={onClosePreview}>Wróć do widoku instrumentu</SecondaryButton>}
@@ -1841,7 +1844,10 @@ const AnalysisHistory = ({ analyses, activeAnalysisId, helperOnline, busy, onSel
                   <p className="text-sm font-semibold text-slate-200">{analysis.title || `Analiza ${formatDate(analysis.createdAt || analysis.updatedAt)}`}</p>
                   {isActive && <Badge status="online">podgląd</Badge>}
                 </div>
-                <p className="mt-1 text-xs text-slate-500">{analysis.model || analysis.provider || 'model niepodany'} · {analysis.schemaVersion || analysis.version || 'v1'}</p>
+                <p className="mt-1 text-xs text-slate-500">{[
+                  analysis.provider === 'openai' ? 'OpenAI GPT' : analysis.provider === 'perplexity' ? 'Perplexity' : analysis.provider,
+                  analysis.model,
+                ].filter(Boolean).join(' · ') || 'provider lub model niepodany'} · {analysis.schemaVersion || analysis.version || 'v1'}</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <Badge status={analysis.status}>{getStatusLabel(analysis.status)}</Badge>
@@ -1881,6 +1887,7 @@ const AnalysisSettingsModal = ({
   selectedDocumentIds,
   documentSelection,
   helperOnline,
+  openaiConfigured,
   loading,
   busy,
   documents,
@@ -1897,6 +1904,8 @@ const AnalysisSettingsModal = ({
   onRenameAnalysis,
   onDeleteAnalysis,
 }) => {
+  const [provider, setProvider] = useState('perplexity');
+
   if (!open) return null;
 
   return createPortal(
@@ -1917,16 +1926,51 @@ const AnalysisSettingsModal = ({
               <section className="rounded-2xl border border-slate-800/80 bg-slate-900 p-5 shadow-xl">
                 <SectionHeading
                   title="Konfiguracja analizy"
-                  description="Wybierz dokumenty, odśwież dane albo uruchom analizę dla zaznaczonych materiałów."
+                  description="Wybierz dokumenty i providera, a następnie uruchom analizę dla zaznaczonych materiałów."
                 />
+                <div className="mb-4">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Provider analizy</p>
+                  <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Provider analizy">
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={provider === 'perplexity'}
+                      onClick={() => setProvider('perplexity')}
+                      className={`rounded-xl border px-4 py-3 text-left transition-colors ${provider === 'perplexity'
+                        ? 'border-blue-400/60 bg-blue-500/10 text-blue-100'
+                        : 'border-slate-700/70 bg-slate-950/45 text-slate-300 hover:border-slate-600'}`}
+                    >
+                      <span className="block text-sm font-semibold">Perplexity</span>
+                      <span className="mt-1 block text-xs leading-5 text-slate-400">Domyślny provider analizy raportów.</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={provider === 'openai'}
+                      disabled={!openaiConfigured}
+                      onClick={() => setProvider('openai')}
+                      className={`rounded-xl border px-4 py-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${provider === 'openai'
+                        ? 'border-blue-400/60 bg-blue-500/10 text-blue-100'
+                        : 'border-slate-700/70 bg-slate-950/45 text-slate-300 hover:border-slate-600'}`}
+                    >
+                      <span className="block text-sm font-semibold">OpenAI GPT</span>
+                      <span className="mt-1 block text-xs leading-5 text-slate-400">Analiza natywnych plików PDF przez OpenAI.</span>
+                    </button>
+                  </div>
+                  {!openaiConfigured && (
+                    <p className="mt-2 text-xs leading-5 text-amber-300">
+                      OpenAI GPT jest niedostępne: ustaw <code className="font-mono text-amber-200">OPENAI_API_KEY</code> w <code className="font-mono text-amber-200">.env.local</code> helpera i odśwież widok.
+                    </p>
+                  )}
+                </div>
                 <div className="grid gap-2 sm:grid-cols-2">
                   <SecondaryButton disabled={!helperOnline || busy || loading} onClick={onRefresh}>Odśwież dane</SecondaryButton>
                   <PrimaryButton
-                    disabled={!helperOnline || busy || !documentSelection.valid}
-                    onClick={onRunAnalysis}
+                    disabled={!helperOnline || busy || !documentSelection.valid || (provider === 'openai' && !openaiConfigured)}
+                    onClick={() => onRunAnalysis(provider)}
                     title={!documentSelection.valid ? documentSelection.message : undefined}
                   >
-                    Analizuj {selectedDocumentIds.length ? `(${selectedDocumentIds.length})` : ''}
+                    Analizuj przez {provider === 'openai' ? 'OpenAI GPT' : 'Perplexity'} {selectedDocumentIds.length ? `(${selectedDocumentIds.length})` : ''}
                   </PrimaryButton>
                 </div>
                 <p className={`mt-3 text-xs leading-5 ${documentSelection.valid ? 'text-slate-500' : 'text-amber-300'}`}>
@@ -1987,7 +2031,7 @@ const getProfileParts = (response, fallback) => {
   };
 };
 
-const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperError, onRefreshOverview, busy, setBusy, setNotice }) => {
+const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperHealth, helperError, onRefreshOverview, busy, setBusy, setNotice }) => {
   const [detail, setDetail] = useState(() => getProfileParts(null, fallbackProfile));
   const [loading, setLoading] = useState(false);
   const [operationMessage, setOperationMessage] = useState('');
@@ -2007,6 +2051,7 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
   } = analysisSelection;
 
   const helperOnline = helperStatus === 'online';
+  const openaiConfigured = Boolean(helperHealth?.openaiConfigured);
   const profile = detail.profile || fallbackProfile;
   const selectionModel = useMemo(() => buildAnalysisSelectionModel(detail.analyses), [detail.analyses]);
   const effectiveSelectedReportAnalysisId = selectionModel.reportOptions.some(
@@ -2123,13 +2168,13 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
     return result;
   };
 
-  const runAnalysis = () => {
+  const runAnalysis = (provider = 'perplexity') => {
     if (!documentSelection.valid) {
       setNotice({ type: 'error', text: documentSelection.message });
       return Promise.resolve(null);
     }
     return perform(async () => {
-      const result = await analysisApi.runAnalysis(assetId, { documentIds: selectedDocumentIds, model: 'sonar-pro' });
+      const result = await analysisApi.runAnalysis(assetId, { documentIds: selectedDocumentIds, provider });
       const nextAnalysisId = getItemId(result);
       if (nextAnalysisId) {
         dispatchAnalysisSelection({ type: 'open_preview', analysisId: nextAnalysisId });
@@ -2228,12 +2273,13 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
         onClose={() => setAnalysisDialog(null)}
         onConfirm={confirmAnalysisDialog}
       />
-      <AnalysisSettingsModal
+      {settingsOpen && <AnalysisSettingsModal
         open={settingsOpen}
         profile={profile}
         selectedDocumentIds={selectedDocumentIds}
         documentSelection={documentSelection}
         helperOnline={helperOnline}
+        openaiConfigured={openaiConfigured}
         loading={loading}
         busy={busy}
         documents={detail.documents}
@@ -2252,7 +2298,7 @@ const AssetAnalysisDetail = ({ assetId, fallbackProfile, helperStatus, helperErr
         }}
         onRenameAnalysis={(analysis) => setAnalysisDialog({ mode: 'rename', analysis })}
         onDeleteAnalysis={(analysis) => setAnalysisDialog({ mode: 'delete', analysis })}
-      />
+      />}
 
       {(loading || operationMessage) && (
         <div className="mb-6">
@@ -2321,6 +2367,7 @@ const Analysis = () => {
   const liveData = useLiveData();
   const [serverProfiles, setServerProfiles] = useState([]);
   const [helperStatus, setHelperStatus] = useState('loading');
+  const [helperHealth, setHelperHealth] = useState(null);
   const [helperError, setHelperError] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState(null);
@@ -2344,7 +2391,8 @@ const Analysis = () => {
     setHelperStatus('loading');
     setHelperError('');
     try {
-      await analysisApi.getHealth();
+      const health = await analysisApi.getHealth();
+      setHelperHealth(health);
       setHelperStatus('online');
       const positions = toSyncPositions(portfolioAssets);
       await analysisApi.syncProfiles(positions);
@@ -2352,6 +2400,7 @@ const Analysis = () => {
       setServerProfiles(profilesResult);
     } catch (error) {
       setHelperStatus('offline');
+      setHelperHealth(null);
       setHelperError(error.message || 'Nie udało się połączyć z lokalnym helperem.');
       if (!isHelperUnavailable(error)) setNotice({ type: 'error', text: error.message || 'Błąd lokalnego helpera.' });
     }
@@ -2412,6 +2461,7 @@ const Analysis = () => {
           assetId={assetId}
           fallbackProfile={fallbackProfile}
           helperStatus={helperStatus}
+          helperHealth={helperHealth}
           helperError={helperError}
           onRefreshOverview={refreshOverview}
           busy={busy}

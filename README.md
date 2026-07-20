@@ -57,7 +57,7 @@ Pobrane zakresy są zapisywane do `data/analysis.sqlite`, a przeglądarka zachow
 
 ## Prywatność
 
-Aplikacja nie wysyła danych portfela do zdalnego backendu projektu. Dane pozostają lokalne w `data/` i cache przeglądarki. Zewnętrzne requesty występują wyłącznie po świadomej akcji użytkownika: pobraniu Google Sheets, pobraniu wskazanego raportu albo uruchomieniu Perplexity dla zatwierdzonych dokumentów.
+Aplikacja nie wysyła danych portfela do zdalnego backendu projektu. Dane pozostają lokalne w `data/` i cache przeglądarki. Zewnętrzne requesty występują wyłącznie po świadomej akcji użytkownika: pobraniu Google Sheets, pobraniu wskazanego raportu albo uruchomieniu analizy przez wybranego providera dla zatwierdzonych dokumentów.
 
 ## Analiza Raportów
 
@@ -70,10 +70,15 @@ Helper zapisuje bazę, raporty, rozpakowane paczki ZIP i backupy w `data/`; kata
 
 ```env
 PERPLEXITY_API_KEY=...
+OPENAI_API_KEY=...
+# opcjonalnie; domyślnie: gpt-5.6
+OPENAI_ANALYSIS_MODEL=gpt-5.6
 ```
 
-Nie używaj prefiksu `VITE_`: klucz pozostaje wyłącznie po stronie helpera. Samo otwarcie aktywa nie wykonuje żadnego zewnętrznego ani płatnego zapytania. Przepływ to: wyszukanie kandydata -> zatwierdzenie i lokalne archiwum oryginału -> analiza -> podgląd szkicu -> zatwierdzenie historii. Ręczny upload raportu jest dostępny w każdej chwili.
+Nie używaj prefiksu `VITE_`: klucze pozostają wyłącznie po stronie helpera. Samo otwarcie aktywa nie wykonuje żadnego zewnętrznego ani płatnego zapytania. Przepływ to: wyszukanie kandydata -> zatwierdzenie i lokalne archiwum oryginału -> wybór dokumentów i providera -> analiza -> podgląd szkicu -> zatwierdzenie historii. Ręczny upload raportu jest dostępny w każdej chwili.
 
-Wyszukanie używa modelu `sonar`, a analiza zatwierdzonych dokumentów `sonar-pro`. Aplikacja ma domyślny limit 10 USD miesięcznie i zapisuje koszt zwrócony przez API; ustawienia rozliczeń Perplexity nadal są ostateczną kontrolą wydatków. Wybrane dokumenty są wysyłane do Perplexity dopiero po kliknięciu **Analizuj**.
+W modalu **Konfiguracja analizy** wybierasz `Perplexity` albo `OpenAI GPT`. Perplexity jest ustawione domyślnie; wybór nie jest zapamiętywany po zamknięciu modalu. OpenAI jest dostępne tylko po ustawieniu `OPENAI_API_KEY` i przyjmuje wyłącznie oryginalne pliki PDF o łącznym rozmiarze do 50 MB. Wybrane dokumenty są wysyłane do wybranego providera dopiero po kliknięciu **Analizuj**.
+
+Wyszukanie kandydatów używa Perplexity i modelu `sonar`, a analiza Perplexity zatwierdzonych dokumentów używa `sonar-pro`. Analiza OpenAI używa modelu `OPENAI_ANALYSIS_MODEL` (domyślnie `gpt-5.6`) w dwóch etapach. Koszt OpenAI zapisywany technicznie przy analizie jest estymacją wyliczoną z usage zwróconego przez API, a nie rozliczeniem końcowym — ostateczne kwoty należy sprawdzać w portalu providera.
 
 Pełny backup zawiera SQLite, wszystkie archiwalne dokumenty, manifest i dozwolony snapshot cache przeglądarki. Import przywraca dane analityczne i stan aplikacji z `data/`.

@@ -13,6 +13,12 @@ import {
   discoverCandidatesWithPerplexity,
   extractMetricsWithPerplexity,
 } from '../server/perplexity.js';
+import {
+  analyzeDocumentsWithOpenAI,
+  extractMetricsWithOpenAI,
+  MAX_OPENAI_ANALYSIS_INPUT_BYTES,
+  OPENAI_PDF_DETAIL,
+} from '../server/openai.js';
 
 const withTemporaryDirectory = async (callback) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'stock-analyzer-test-'));
@@ -1298,7 +1304,440 @@ test('Perplexity validates PDF headers, size and attachment count before fetch',
     (error) => error?.code === 'PERPLEXITY_TOO_MANY_FILES' && error?.status === 400,
   );
 
-  assert.equal(fetchCalls, 0);
+    assert.equal(fetchCalls, 0);
+});
+
+const openAIResponse = (content, { model = 'gpt-5.6', usage } = {}) => new Response(JSON.stringify({
+  status: 'completed',
+  model,
+  output: [{ content: [{ type: 'output_text', text: typeof content === 'string' ? content : JSON.stringify(content) }] }],
+  usage: usage || {
+    input_tokens: 1000,
+    input_tokens_details: { cached_tokens: 100, cache_write_tokens: 10 },
+    output_tokens: 200,
+    total_tokens: 1200,
+  },
+}), { status: 200, headers: { 'Content-Type': 'application/json' } });
+
+test('analysis endpoint routes OpenAI, exposes configuration and persists the returned model', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const requests = [];
+    const extraction = { metricFacts: [], extractionWarnings: [] };
+    const synthesis = {
+      title: 'Analiza OpenAI',
+      summary: 'Raport został przeanalizowany.',
+      structuredSummary: {
+        headline: 'Wynik analizy OpenAI.',
+        stance: 'mieszany',
+        sections: [
+          { title: 'Fakty', bullets: [{ text: 'Brak dodatkowych faktów do pokazania.' }] },
+          { title: 'Ryzyka', bullets: [{ text: 'Wymagana dalsza analiza raportu.' }] },
+          { title: 'Dalej', bullets: [{ text: 'Porównaj z kolejnym okresem.' }] },
+        ],
+      },
+      risks: [],
+      conclusions: [],
+    };
+    const helper = await startAnalysisHelper({
+      port: 0,
+      dataDir: directory,
+      apiKey: 'perplexity-key',
+      openaiApiKey: 'openai-key',
+      openaiAnalysisModel: 'gpt-5.6',
+      fetchImpl: async (_url, options) => {
+        const request = JSON.parse(options.body);
+        requests.push(request);
+        return openAIResponse(
+          request.text.format.name === 'analysis_metric_extraction' ? extraction : synthesis,
+          { model: 'gpt-5.6-actual' },
+        );
+      },
+    });
+    try {
+      const port = helper.server.address().port;
+      const base = `http://127.0.0.1:${port}/api/analysis`;
+      const assetId = 'company:WSE:CDR';
+      const saved = await helper.store.saveDocument(assetId, {
+        buffer: Buffer.from('%PDF-1.7\n%%EOF'),
+        filename: 'q1-2026.pdf',
+        title: 'Raport Q1 2026',
+        type: 'quarterly_report',
+        period: 'Q1 2026',
+        mimeType: 'application/pdf',
+      });
+
+      const healthResponse = await fetch(`${base}/health`);
+      const health = (await healthResponse.json()).data;
+      assert.equal(health.perplexityConfigured, true);
+      assert.equal(health.openaiConfigured, true);
+
+      const response = await fetch(`${base}/profiles/${encodeURIComponent(assetId)}/analyses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ documentIds: [saved.document.id], provider: 'openai' }),
+      });
+      const payload = await response.json();
+
+      assert.equal(response.status, 201);
+      assert.equal(requests.length, 2);
+      assert.equal(requests[0].model, 'gpt-5.6');
+      assert.equal(payload.data.analysis.provider, 'openai');
+      assert.equal(payload.data.analysis.model, 'gpt-5.6-actual (extraction + synthesis)');
+      assert.equal(payload.data.analysis.metadata.costEstimated, true);
+      assert.equal(payload.data.analysis.metadata.usageEstimate.tokens.input, 2000);
+      assert.equal(helper.store.listAnalyses(assetId)[0].provider, 'openai');
+
+      const unknownProvider = await fetch(`${base}/profiles/${encodeURIComponent(assetId)}/analyses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ documentIds: [saved.document.id], provider: 'unknown' }),
+      });
+      assert.equal(unknownProvider.status, 400);
+      assert.equal((await unknownProvider.json()).error.code, 'INVALID_ANALYSIS_PROVIDER');
+
+      helper.store.db.prepare('UPDATE documents SET size_bytes = ? WHERE id = ?')
+        .run(MAX_OPENAI_ANALYSIS_INPUT_BYTES + 1, saved.document.id);
+      const tooLarge = await fetch(`${base}/profiles/${encodeURIComponent(assetId)}/analyses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ documentIds: [saved.document.id], provider: 'openai' }),
+      });
+      assert.equal(tooLarge.status, 413);
+      assert.equal((await tooLarge.json()).error.code, 'OPENAI_INPUT_TOO_LARGE');
+    } finally {
+      await new Promise((resolve) => helper.server.close(resolve));
+      helper.store.close();
+    }
+  });
+});
+
+test('analysis endpoint reports missing OpenAI configuration and rejects non-PDF input before requests', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    let calls = 0;
+    const helper = await startAnalysisHelper({
+      port: 0,
+      dataDir: directory,
+      apiKey: '',
+      openaiApiKey: '',
+      fetchImpl: async () => {
+        calls += 1;
+        throw new Error('OpenAI request must not be sent');
+      },
+    });
+    try {
+      const port = helper.server.address().port;
+      const base = `http://127.0.0.1:${port}/api/analysis`;
+      const assetId = 'company:WSE:CDR';
+      const pdf = await helper.store.saveDocument(assetId, {
+        buffer: Buffer.from('%PDF-1.7\n%%EOF'),
+        filename: 'q1-2026.pdf',
+        title: 'Raport Q1 2026',
+        type: 'quarterly_report',
+        period: 'Q1 2026',
+        mimeType: 'application/pdf',
+      });
+      const health = (await (await fetch(`${base}/health`)).json()).data;
+      assert.equal(health.openaiConfigured, false);
+
+      const missingKey = await fetch(`${base}/profiles/${encodeURIComponent(assetId)}/analyses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ documentIds: [pdf.document.id], provider: 'openai' }),
+      });
+      assert.equal(missingKey.status, 412);
+      assert.equal((await missingKey.json()).error.code, 'OPENAI_NOT_CONFIGURED');
+
+      const html = await helper.store.saveDocument(assetId, {
+        buffer: Buffer.from('<html>Raport Q2</html>'),
+        filename: 'q2-2026.html',
+        title: 'Raport Q2 2026',
+        type: 'quarterly_report',
+        period: 'Q2 2026',
+        mimeType: 'text/html',
+      });
+      const nonPdf = await fetch(`${base}/profiles/${encodeURIComponent(assetId)}/analyses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ documentIds: [html.document.id], provider: 'openai' }),
+      });
+      assert.equal(nonPdf.status, 400);
+      assert.equal((await nonPdf.json()).error.code, 'OPENAI_REQUIRES_PDF');
+      assert.equal(calls, 0);
+    } finally {
+      await new Promise((resolve) => helper.server.close(resolve));
+      helper.store.close();
+    }
+  });
+});
+
+test('OpenAI adapter performs two strict Responses API stages with original PDFs in high detail', async () => {
+  const requests = [];
+  const pdfBuffer = Buffer.from('%PDF-1.7\nORIGINAL_PDF_BYTES_FOR_OPENAI\n%%EOF');
+  const extraction = {
+    metricFacts: [{
+      documentId: 'doc_1',
+      metricKey: 'net_income',
+      label: 'Zysk netto',
+      value: 100,
+      unit: 'mln PLN',
+      period: 'Q1 2026',
+      page: 2,
+      section: 'RZiS',
+      quote: 'Zysk netto 100 mln PLN',
+      confidence: 0.95,
+    }],
+    extractionWarnings: [],
+  };
+  const synthesis = {
+    title: 'Analiza Q1',
+    summary: 'Alior Bank pokazał dodatni wynik netto w Q1 2026.',
+    structuredSummary: {
+      headline: 'Dodatni wynik netto wspiera obraz kwartału.',
+      stance: 'mieszany',
+      sections: [
+        { title: 'Najważniejsze fakty', bullets: [{ text: 'Zysk netto wyniósł 100 mln PLN.', metricKeys: ['net_income'], source: null }] },
+        { title: 'Jakość wyniku', bullets: [{ text: 'Wynik wymaga porównania z kolejnymi kwartałami.', metricKeys: [], source: null }] },
+        { title: 'Co sprawdzić dalej', bullets: [{ text: 'Warto sprawdzić powtarzalność wyniku.', metricKeys: [], source: null }] },
+      ],
+    },
+    risks: [{ text: 'Ryzykiem pozostaje zmienność kosztów.', source: { documentId: 'doc_1', page: 4, section: 'Ryzyka', evidence: 'Opis ryzyk kosztowych' } }],
+    conclusions: [{ text: 'Raport daje podstawę do dalszej obserwacji.', source: { documentId: 'doc_1', page: 2, section: 'RZiS', evidence: 'Zysk netto 100 mln PLN' } }],
+  };
+
+  const analysis = await analyzeDocumentsWithOpenAI({
+    apiKey: 'openai-key',
+    profile: { assetId: 'instrument:ALR_3AWSE', type: 'instrument', name: 'Alior Bank', canonicalId: 'ALR:WSE' },
+    documents: [{ id: 'doc_1', filename: 'q1-2026.pdf', title: 'Raport Q1 2026', type: 'quarterly_report', period: 'Q1 2026', mimeType: 'text/plain' }],
+    documentBuffers: [pdfBuffer],
+    fetchImpl: async (_url, options) => {
+      const request = JSON.parse(options.body);
+      requests.push(request);
+      return openAIResponse(request.text.format.name === 'analysis_metric_extraction' ? extraction : synthesis);
+    },
+    sleepImpl: async () => {},
+  });
+
+  assert.equal(requests.length, 2);
+  assert.equal(analysis.content.schemaVersion, '2.0');
+  assert.equal(analysis.content.reportPeriod, 'Q1 2026');
+  assert.deepEqual(analysis.content.metricFacts.map((fact) => [fact.metricKey, fact.value]), [['net_income', 100]]);
+  assert.equal(analysis.provider, 'openai');
+  assert.deepEqual(analysis.content.structuredSummary.sections[1].bullets[0], {
+    text: 'Wynik wymaga porównania z kolejnymi kwartałami.',
+  });
+  assert.equal(analysis.model, 'gpt-5.6 (extraction + synthesis)');
+  assert.equal(analysis.costEstimated, true);
+  assert.equal(analysis.costUsd, 0.021125);
+  assert.equal(analysis.usage.extraction.inputTokens, 1000);
+  assert.equal(analysis.usage.synthesis.outputTokens, 200);
+  assert.equal(analysis.usageEstimate.costEstimated, true);
+  assert.equal(analysis.usageEstimate.tokens.input, 2000);
+  assert.equal(analysis.usageEstimate.tokens.cachedInput, 200);
+  assert.equal(analysis.usageEstimate.tokens.cacheWrite, 20);
+  assert.equal(analysis.usageEstimate.tokens.output, 400);
+  assert.equal(analysis.usageEstimate.stages[0].pricingModel, 'gpt-5.6-sol');
+  assert.equal(analysis.usageEstimate.stages[0].ratesUsdPerMillion.input, 5);
+  assert.equal(analysis.usageEstimate.stages[0].ratesUsdPerMillion.cachedInput, 0.5);
+  assert.equal(analysis.usageEstimate.stages[0].ratesUsdPerMillion.cacheWrite, 6.25);
+  assert.equal(analysis.usageEstimate.stages[0].ratesUsdPerMillion.output, 30);
+
+  requests.forEach((request, index) => {
+    assert.equal(request.model, 'gpt-5.6');
+    assert.deepEqual(request.reasoning, { effort: 'high' });
+    assert.equal(request.store, false);
+    assert.equal(request.text.format.type, 'json_schema');
+    assert.equal(request.text.format.strict, true);
+    assert.equal(request.text.format.name, index === 0 ? 'analysis_metric_extraction' : 'analysis_synthesis');
+    assert.equal(request.input[1].content[0].type, 'input_text');
+    const file = request.input[1].content[1];
+    assert.equal(file.type, 'input_file');
+    assert.equal(file.filename, 'q1-2026.pdf');
+    assert.equal(file.detail, OPENAI_PDF_DETAIL);
+    assert.equal(file.detail, 'high');
+    assert.equal(file.file_data, `data:application/pdf;base64,${pdfBuffer.toString('base64')}`);
+  });
+
+  assert.deepEqual(requests[0].text.format.schema.required, ['metricFacts', 'extractionWarnings']);
+  assert.deepEqual(requests[1].text.format.schema.required, ['title', 'summary', 'structuredSummary', 'risks', 'conclusions']);
+  const summaryBulletSchema = requests[1].text.format.schema.properties
+    .structuredSummary.properties.sections.items.properties.bullets.items;
+  assert.deepEqual(summaryBulletSchema.required, ['text', 'metricKeys', 'source']);
+  assert.deepEqual(summaryBulletSchema.properties.source.anyOf.map((schema) => schema.type), ['object', 'null']);
+  assert.match(requests[1].input[1].content[0].text, /Niezmienne metricFacts z etapu ekstrakcji/);
+  assert.match(requests[1].input[1].content[0].text, /"metricKey": "net_income"/);
+});
+
+test('OpenAI adapter rejects non-PDF, ZIP and invalid PDF inputs before calling the API', async () => {
+  const profile = { assetId: 'company:WSE:CDR', type: 'company', name: 'CD Projekt', canonicalId: 'CDR:WSE' };
+  const cases = [
+    {
+      document: { id: 'doc_html', filename: 'report.html', title: 'Raport HTML', type: 'quarterly_report', period: 'Q1 2026' },
+      buffer: Buffer.from('<html></html>'),
+      code: 'OPENAI_REQUIRES_PDF',
+    },
+    {
+      document: { id: 'doc_zip', filename: 'report.zip', title: 'Raport ZIP', type: 'quarterly_report', period: 'Q1 2026' },
+      buffer: Buffer.from('PK\u0003\u0004'),
+      code: 'OPENAI_REQUIRES_PDF',
+    },
+    {
+      document: { id: 'doc_fake_pdf', filename: 'report.pdf', title: 'Raport PDF', type: 'quarterly_report', period: 'Q1 2026' },
+      buffer: Buffer.from('not-a-pdf'),
+      code: 'OPENAI_INVALID_PDF',
+    },
+  ];
+
+  for (const item of cases) {
+    let fetchCalls = 0;
+    await assert.rejects(
+      extractMetricsWithOpenAI({
+        apiKey: 'openai-key',
+        profile,
+        documents: [item.document],
+        documentBuffers: [item.buffer],
+        fetchImpl: async () => {
+          fetchCalls += 1;
+          throw new Error('fetch must not be called');
+        },
+        sleepImpl: async () => {},
+      }),
+      (error) => error?.code === item.code && error?.status === 400,
+    );
+    assert.equal(fetchCalls, 0);
+  }
+});
+
+test('OpenAI adapter retries a rate-limited Responses request before succeeding', async () => {
+  const profile = { assetId: 'company:WSE:CDR', type: 'company', name: 'CD Projekt', canonicalId: 'CDR:WSE' };
+  const document = { id: 'doc_1', filename: 'report.pdf', title: 'Raport Q1', type: 'quarterly_report', period: 'Q1 2026' };
+  const retryDelays = [];
+  let calls = 0;
+
+  const extraction = await extractMetricsWithOpenAI({
+    apiKey: 'openai-key',
+    profile,
+    documents: [document],
+    documentBuffers: [Buffer.from('%PDF-1.7\n%%EOF')],
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(JSON.stringify({ error: { message: 'Rate limit exceeded' } }), {
+          status: 429,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return openAIResponse({ metricFacts: [], extractionWarnings: [] });
+    },
+    sleepImpl: async (delay) => { retryDelays.push(delay); },
+  });
+
+  assert.equal(calls, 2);
+  assert.deepEqual(retryDelays, [350]);
+  assert.deepEqual(extraction.metricFacts, []);
+});
+
+test('OpenAI adapter preserves refusal, incomplete response and invalid output usage', async () => {
+  const profile = { assetId: 'company:WSE:CDR', type: 'company', name: 'CD Projekt', canonicalId: 'CDR:WSE' };
+  const document = { id: 'doc_1', filename: 'report.pdf', title: 'Raport Q1', type: 'quarterly_report', period: 'Q1 2026' };
+  const documentBuffers = [Buffer.from('%PDF-1.7\n%%EOF')];
+  const usage = { input_tokens: 321, input_tokens_details: { cached_tokens: 12 }, output_tokens: 45, total_tokens: 366 };
+  const cases = [
+    {
+      payload: { status: 'completed', model: 'gpt-5.6', output: [{ content: [{ type: 'refusal', refusal: 'Nie mogę.' }] }], usage },
+      expectedMessage: /odmówił/,
+    },
+    {
+      payload: { status: 'incomplete', model: 'gpt-5.6', incomplete_details: { reason: 'max_output_tokens' }, output: [], usage },
+      expectedMessage: /niekompletną/,
+    },
+    {
+      payload: { status: 'completed', model: 'gpt-5.6', output: [{ content: [{ type: 'output_text', text: '{broken' }] }], usage },
+      expectedMessage: /niepoprawny JSON/,
+    },
+  ];
+
+  for (const item of cases) {
+    await assert.rejects(
+      extractMetricsWithOpenAI({
+        apiKey: 'openai-key',
+        profile,
+        documents: [document],
+        documentBuffers,
+        fetchImpl: async () => new Response(JSON.stringify(item.payload), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+        sleepImpl: async () => {},
+      }),
+      (error) => {
+        assert.equal(error?.code, 'OPENAI_INVALID_RESPONSE');
+        assert.match(error.message, item.expectedMessage);
+                assert.equal(error.confirmedOpenAIUsage?.[0]?.stage, 'extraction');
+        assert.equal(error.confirmedOpenAIUsage?.[0]?.inputTokens, 321);
+        assert.equal(error.confirmedOpenAIUsage?.[0]?.outputTokens, 45);
+        assert.equal(error.costEstimated, true);
+        assert.equal(error.openAIUsageEstimate?.tokens.input, 321);
+        assert.equal(error.openAIUsageEstimate?.tokens.output, 45);
+        return true;
+      },
+    );
+    }
+});
+
+test('OpenAI adapter reports only confirmed API usage when synthesis fails after extraction', async () => {
+  const profile = { assetId: 'company:WSE:CDR', type: 'company', name: 'CD Projekt', canonicalId: 'CDR:WSE' };
+  const document = { id: 'doc_1', filename: 'report.pdf', title: 'Raport Q1', type: 'quarterly_report', period: 'Q1 2026' };
+  const documentBuffers = [Buffer.from('%PDF-1.7\n%%EOF')];
+  const extraction = {
+    metricFacts: [{
+      documentId: 'doc_1',
+      metricKey: 'net_income',
+      label: 'Zysk netto',
+      value: 100,
+      unit: 'mln PLN',
+      period: 'Q1 2026',
+      page: 2,
+      section: 'RZiS',
+      quote: 'Zysk netto 100 mln PLN',
+      confidence: 0.95,
+    }],
+    extractionWarnings: [],
+  };
+  let calls = 0;
+
+  await assert.rejects(
+    analyzeDocumentsWithOpenAI({
+      apiKey: 'openai-key',
+      profile,
+      documents: [document],
+      documentBuffers,
+      fetchImpl: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return openAIResponse(extraction, {
+            usage: { input_tokens: 1000, input_tokens_details: { cached_tokens: 100, cache_write_tokens: 10 }, output_tokens: 200, total_tokens: 1200 },
+          });
+        }
+        return openAIResponse('{broken', {
+          usage: { input_tokens: 2000, input_tokens_details: { cached_tokens: 50, cache_write_tokens: 20 }, output_tokens: 300, total_tokens: 2300 },
+        });
+      },
+      sleepImpl: async () => {},
+    }),
+    (error) => {
+      assert.equal(error?.code, 'OPENAI_INVALID_RESPONSE');
+      assert.equal(calls, 2);
+      assert.deepEqual(
+        error.confirmedOpenAIUsage.map((entry) => [entry.stage, entry.inputTokens, entry.outputTokens]),
+        [
+          ['synthesis', 2000, 300],
+          ['extraction', 1000, 200],
+        ],
+      );
+      assert.equal(error.openAIUsageEstimate.costEstimated, true);
+      assert.equal(error.openAIUsageEstimate.tokens.input, 3000);
+      assert.equal(error.openAIUsageEstimate.tokens.output, 500);
+      assert.equal(error.openAIUsageEstimate.stages.length, 2);
+      return true;
+    },
+  );
 });
 
 test('analysis endpoint returns PDF validation codes in the existing helper error format', async () => {

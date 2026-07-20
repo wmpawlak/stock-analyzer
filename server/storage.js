@@ -225,6 +225,7 @@ const mapAnalysis = (row, { includeContent = true } = {}) => ({
   provider: row.provider,
   model: row.model,
   costUsd: Number(row.cost_usd || 0),
+  metadata: parseJson(row.metadata_json, {}),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   approvedAt: row.approved_at || null,
@@ -618,7 +619,8 @@ export class AnalysisStore {
         content_json TEXT NOT NULL DEFAULT '{}',
         provider TEXT NOT NULL DEFAULT 'perplexity',
         model TEXT NOT NULL DEFAULT 'sonar-pro',
-        cost_usd REAL NOT NULL DEFAULT 0,
+                cost_usd REAL NOT NULL DEFAULT 0,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         approved_at TEXT
@@ -670,11 +672,19 @@ export class AnalysisStore {
       CREATE INDEX IF NOT EXISTS idx_approved_report_metrics_analysis ON approved_report_metrics(analysis_id);
       CREATE INDEX IF NOT EXISTS idx_usage_month ON api_usage(month);
     `);
+    this.migrateAnalysisMetadata();
     this.migrateApprovedReportMetricUniqueness();
     const current = this.db.prepare('SELECT id FROM budget_settings WHERE id = 1').get();
     if (!current) {
       this.db.prepare('INSERT INTO budget_settings (id, monthly_limit_usd, updated_at) VALUES (1, ?, ?)')
         .run(DEFAULT_BUDGET_USD, nowIso(this.clock));
+    }
+  }
+
+  migrateAnalysisMetadata() {
+    const columns = this.db.prepare('PRAGMA table_info(analyses)').all().map((column) => column.name);
+    if (!columns.includes('metadata_json')) {
+      this.db.prepare('ALTER TABLE analyses ADD COLUMN metadata_json TEXT NOT NULL DEFAULT \'{}\'').run();
     }
   }
 
@@ -1220,12 +1230,13 @@ export class AnalysisStore {
     return analysis;
   }
 
-  createDraftAnalysis(assetId, {
+    createDraftAnalysis(assetId, {
     documentIds,
     content,
     model = 'sonar-pro',
     provider = 'perplexity',
     costUsd = 0,
+    metadata = {},
   }) {
     this.ensureProfileExists(assetId);
     const ids = normalizeStringArray(documentIds);
@@ -1239,10 +1250,23 @@ export class AnalysisStore {
     const timestamp = nowIso(this.clock);
     const id = newId('analysis');
     const title = stringOrEmpty(analysisContent.title) || `Analiza ${this.ensureProfileExists(assetId).name}`;
-    this.db.prepare(`INSERT INTO analyses
-      (id, asset_id, status, title, schema_version, document_ids_json, content_json, provider, model, cost_usd, created_at, updated_at, approved_at)
-      VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`)
-      .run(id, assetId, title, stringOrEmpty(analysisContent.schemaVersion) || '1.0', JSON.stringify(ids), JSON.stringify(analysisContent), provider, model, Math.max(0, asFiniteNumber(costUsd, 0)), timestamp, timestamp);
+        this.db.prepare(`INSERT INTO analyses
+      (id, asset_id, status, title, schema_version, document_ids_json, content_json, provider, model, cost_usd, metadata_json, created_at, updated_at, approved_at)
+      VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`)
+      .run(
+        id,
+        assetId,
+        title,
+        stringOrEmpty(analysisContent.schemaVersion) || '1.0',
+        JSON.stringify(ids),
+        JSON.stringify(analysisContent),
+        provider,
+        model,
+        Math.max(0, asFiniteNumber(costUsd, 0)),
+        JSON.stringify(ensurePlainObject(metadata, 'Metadane analizy mają nieprawidłowy format.')),
+        timestamp,
+        timestamp,
+      );
     return mapAnalysis(this.getAnalysis(id));
   }
 

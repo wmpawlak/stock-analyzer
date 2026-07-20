@@ -24,6 +24,10 @@ import {
   discoverCandidatesWithPerplexity,
 } from './perplexity.js';
 import {
+  analyzeDocumentsWithOpenAI,
+  MAX_OPENAI_ANALYSIS_INPUT_BYTES,
+} from './openai.js';
+import {
   validateAnalysisDocumentSelection,
   validateReportDocumentMetadata,
 } from '../shared/reportDocuments.js';
@@ -33,25 +37,41 @@ const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 4310;
 const MAX_ANALYSIS_INPUT_BYTES = 100 * 1024 * 1024;
 const MAX_BROWSER_STATE_BYTES = 10 * 1024 * 1024;
+const ANALYSIS_PROVIDERS = new Set(['perplexity', 'openai']);
 
 const getPort = (value) => {
   const port = Number(value);
   return Number.isInteger(port) && port > 0 && port < 65_536 ? port : DEFAULT_PORT;
 };
 
-const readPerplexityApiKey = async (envPath = path.resolve(process.cwd(), '.env.local')) => {
-  const fromEnvironment = stringOrEmpty(process.env.PERPLEXITY_API_KEY);
+const readEnvValue = async (name, envPath = path.resolve(process.cwd(), '.env.local')) => {
+  const fromEnvironment = stringOrEmpty(process.env[name]);
   if (fromEnvironment) return fromEnvironment;
   try {
     const content = await readFile(envPath, 'utf8');
-    const line = content.split(/\r?\n/).find((entry) => /^\s*(?:export\s+)?PERPLEXITY_API_KEY\s*=/.test(entry));
+    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const line = content.split(/\r?\n/).find((entry) => new RegExp(`^\\s*(?:export\\s+)?${escapedName}\\s*=`).test(entry));
     if (!line) return '';
-    const value = line.replace(/^\s*(?:export\s+)?PERPLEXITY_API_KEY\s*=\s*/, '').trim();
+    const value = line.replace(new RegExp(`^\\s*(?:export\\s+)?${escapedName}\\s*=\\s*`), '').trim();
     if (!value) return '';
     return value.replace(/^(['"])(.*)\1$/, '$2').trim();
   } catch {
     return '';
   }
+};
+
+const readPerplexityApiKey = (envPath) => readEnvValue('PERPLEXITY_API_KEY', envPath);
+const readOpenAIApiKey = (envPath) => readEnvValue('OPENAI_API_KEY', envPath);
+const readOpenAIAnalysisModel = (envPath) => readEnvValue('OPENAI_ANALYSIS_MODEL', envPath);
+
+const resolveAnalysisProvider = (value) => {
+  if (value === undefined) return 'perplexity';
+  if (typeof value === 'string' && ANALYSIS_PROVIDERS.has(value)) return value;
+  throw new AppError(
+    'INVALID_ANALYSIS_PROVIDER',
+    'Provider analizy musi mieć wartość „perplexity” albo „openai”.',
+    400,
+  );
 };
 
 const pathParts = (pathname) => {
@@ -104,7 +124,15 @@ const toApiProfile = (profile) => ({
 
 const requireProfile = (store, assetId) => toApiProfile(store.getProfile(assetId));
 
-const handleRoute = async ({ request, response, store, apiKey, fetchImpl }) => {
+const handleRoute = async ({
+  request,
+  response,
+  store,
+  perplexityApiKey,
+  openaiApiKey,
+  openaiAnalysisModel,
+  fetchImpl,
+}) => {
   const method = request.method || 'GET';
   const url = new URL(request.url || '/', `http://${request.headers.host || DEFAULT_HOST}`);
   const parts = pathParts(url.pathname);
@@ -124,7 +152,8 @@ const handleRoute = async ({ request, response, store, apiKey, fetchImpl }) => {
       status: 'online',
       version: '1.0',
       dataDirectory: 'data',
-      perplexityConfigured: Boolean(apiKey),
+      perplexityConfigured: Boolean(perplexityApiKey),
+      openaiConfigured: Boolean(openaiApiKey),
     });
     return;
   }
@@ -258,7 +287,7 @@ const handleRoute = async ({ request, response, store, apiKey, fetchImpl }) => {
         await readJsonBody(request); // Explicit user action; options are intentionally advisory for now.
         const profile = requireProfile(store, assetId);
         const result = await discoverCandidatesWithPerplexity({
-          apiKey,
+          apiKey: perplexityApiKey,
           profile,
           sources: store.listSources(assetId),
           fetchImpl,
@@ -308,6 +337,7 @@ const handleRoute = async ({ request, response, store, apiKey, fetchImpl }) => {
       }
       if (parts.length === 3 && method === 'POST') {
         const body = await readJsonBody(request);
+        const provider = resolveAnalysisProvider(body.provider);
         const documentIds = Array.isArray(body.documentIds) ? body.documentIds : [];
         const documents = documentIds.map((documentId) => store.getDocumentRow(documentId));
         if (!documents.length || documents.some((document) => document.asset_id !== assetId || !document.analyzable)) {
@@ -317,6 +347,9 @@ const handleRoute = async ({ request, response, store, apiKey, fetchImpl }) => {
         if (!selection.valid) throw new AppError(selection.code, selection.message, 400);
         const profile = requireProfile(store, assetId);
         const totalInputBytes = documents.reduce((total, document) => total + Number(document.size_bytes || 0), 0);
+        if (provider === 'openai' && totalInputBytes > MAX_OPENAI_ANALYSIS_INPUT_BYTES) {
+          throw new AppError('OPENAI_INPUT_TOO_LARGE', 'Łączny rozmiar dokumentów dla OpenAI przekracza 50 MB.', 413);
+        }
         if (totalInputBytes > MAX_ANALYSIS_INPUT_BYTES) {
           throw new AppError('ANALYSIS_INPUT_TOO_LARGE', 'Łączny rozmiar dokumentów do analizy przekracza 100 MB.', 413);
         }
@@ -329,8 +362,7 @@ const handleRoute = async ({ request, response, store, apiKey, fetchImpl }) => {
         }));
         let result;
         try {
-          result = await analyzeDocumentsWithPerplexity({
-            apiKey,
+          const workerInput = {
             profile,
             documents: documents.map((document) => ({
               id: document.id,
@@ -344,30 +376,64 @@ const handleRoute = async ({ request, response, store, apiKey, fetchImpl }) => {
             })),
             documentBuffers: buffers,
             fetchImpl,
-          });
+          };
+          result = provider === 'openai'
+            ? await analyzeDocumentsWithOpenAI({
+              ...workerInput,
+              apiKey: openaiApiKey,
+              model: openaiAnalysisModel,
+            })
+            : await analyzeDocumentsWithPerplexity({
+              ...workerInput,
+              apiKey: perplexityApiKey,
+            });
         } catch (error) {
-          const confirmedCostUsd = Number(error?.confirmedCostUsd);
-          if (Number.isFinite(confirmedCostUsd) && confirmedCostUsd > 0) {
+          const confirmedCostUsd = provider === 'openai'
+            ? Number(error?.openAIUsageEstimate?.costUsd)
+            : Number(error?.confirmedCostUsd);
+          const hasConfirmedUsage = provider === 'openai'
+            ? Array.isArray(error?.confirmedOpenAIUsage) && error.confirmedOpenAIUsage.length > 0
+            : Number.isFinite(confirmedCostUsd) && confirmedCostUsd > 0;
+          if (hasConfirmedUsage && Number.isFinite(confirmedCostUsd) && confirmedCostUsd >= 0) {
             store.recordUsage({
               action: 'analysis',
               costUsd: confirmedCostUsd,
               metadata: {
-                model: 'sonar-pro (extraction + synthesis)',
+                model: provider === 'openai'
+                  ? (error?.openAIUsageEstimate?.model || openaiAnalysisModel)
+                  : 'sonar-pro (extraction + synthesis)',
                 documentIds,
                 status: 'failed',
                 errorCode: stringOrEmpty(error?.code) || 'INTERNAL_ERROR',
+                ...(provider === 'openai' ? {
+                  provider,
+                  costEstimated: Boolean(error?.costEstimated),
+                  usage: error.confirmedOpenAIUsage,
+                  usageEstimate: error.openAIUsageEstimate,
+                } : {}),
               },
             });
           }
           throw error;
         }
-        const budget = store.recordUsage({ action: 'analysis', costUsd: result.costUsd, metadata: { model: result.model, documentIds } });
+        const resultMetadata = provider === 'openai' ? {
+          provider,
+          costEstimated: Boolean(result.costEstimated),
+          usage: result.usage,
+          usageEstimate: result.usageEstimate,
+        } : {};
+        const budget = store.recordUsage({
+          action: 'analysis',
+          costUsd: result.costUsd,
+          metadata: { model: result.model, documentIds, ...resultMetadata },
+        });
         const analysis = store.createDraftAnalysis(assetId, {
           documentIds,
           content: result.content,
           model: result.model,
-          provider: 'perplexity',
+          provider,
           costUsd: result.costUsd,
+          metadata: resultMetadata,
         });
         sendData(response, { analysis, budget }, 201);
         return;
@@ -435,11 +501,26 @@ const handleRoute = async ({ request, response, store, apiKey, fetchImpl }) => {
   throw new AppError('NOT_FOUND', 'Nie znaleziono endpointu helpera.', 404);
 };
 
-export const createAnalysisServer = ({ store, apiKey = '', fetchImpl = fetch } = {}) => {
+export const createAnalysisServer = ({
+  store,
+  apiKey = '',
+  perplexityApiKey = apiKey,
+  openaiApiKey = '',
+  openaiAnalysisModel = '',
+  fetchImpl = fetch,
+} = {}) => {
   if (!store) throw new Error('createAnalysisServer wymaga magazynu danych.');
   return createHttpServer(async (request, response) => {
     try {
-      await handleRoute({ request, response, store, apiKey, fetchImpl });
+      await handleRoute({
+        request,
+        response,
+        store,
+        perplexityApiKey: stringOrEmpty(perplexityApiKey),
+        openaiApiKey: stringOrEmpty(openaiApiKey),
+        openaiAnalysisModel: stringOrEmpty(openaiAnalysisModel),
+        fetchImpl,
+      });
     } catch (error) {
       sendError(response, error);
     }
@@ -451,14 +532,26 @@ export const startAnalysisHelper = async ({
   port = getPort(process.env.ANALYSIS_HELPER_PORT),
   dataDir = process.env.ANALYSIS_DATA_DIR || path.resolve(process.cwd(), 'data'),
   apiKey,
+  openaiApiKey,
+  openaiAnalysisModel,
   fetchImpl,
 } = {}) => {
   if (host !== DEFAULT_HOST) {
     throw new AppError('INVALID_HOST', 'Helper analizy może działać wyłącznie na 127.0.0.1.', 400);
   }
   const store = await createAnalysisStore({ dataDir });
-  const resolvedKey = apiKey === undefined ? await readPerplexityApiKey() : apiKey;
-  const server = createAnalysisServer({ store, apiKey: resolvedKey, fetchImpl });
+  const resolvedPerplexityApiKey = apiKey === undefined ? await readPerplexityApiKey() : apiKey;
+  const resolvedOpenAIApiKey = openaiApiKey === undefined ? await readOpenAIApiKey() : openaiApiKey;
+  const resolvedOpenAIAnalysisModel = openaiAnalysisModel === undefined
+    ? await readOpenAIAnalysisModel()
+    : openaiAnalysisModel;
+  const server = createAnalysisServer({
+    store,
+    perplexityApiKey: resolvedPerplexityApiKey,
+    openaiApiKey: resolvedOpenAIApiKey,
+    openaiAnalysisModel: resolvedOpenAIAnalysisModel,
+    fetchImpl,
+  });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, host, () => {
